@@ -5,6 +5,7 @@ using ClaudioAi.Actions;
 using ClaudioAi.Audio;
 using ClaudioAi.Brain;
 using ClaudioAi.Diagnostics;
+using ClaudioAi.Memory;
 using ClaudioAi.Projects;
 using ClaudioAi.Speech;
 
@@ -33,6 +34,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
     readonly ActionRouter _router;
     readonly ProjectResolver _projects;
     readonly GitOps _git;
+    readonly MemoryStore _memory;
     readonly Voice _voice;
 
     readonly CancellationTokenSource _cts = new();
@@ -63,7 +65,8 @@ public sealed class ClaudioTrayContext : ApplicationContext
 
         _stt = new SpeechToText(cfg);
         _listener = new ContinuousListener(cfg, _stt);
-        _brain = new ClaudeBrain(cfg);
+        _memory = new MemoryStore(cfg);
+        _brain = new ClaudeBrain(cfg, _memory);
         _router = new ActionRouter();
         _projects = new ProjectResolver(cfg);
         _git = new GitOps(cfg);
@@ -254,6 +257,36 @@ public sealed class ClaudioTrayContext : ApplicationContext
                     var answer = await _brain.AnswerFromWebAsync(question, _cts.Token);
                     Log.Info($"web_answer «{question}» → {answer}");
                     await _voice.SpeakAsync(answer, _cts.Token);
+                    return;
+                }
+
+                case "remember":
+                {
+                    var fact = (action.Target ?? "").Trim();
+                    if (string.IsNullOrWhiteSpace(fact))
+                    {
+                        await _voice.SpeakAsync("¿Qué quieres que recuerde?", _cts.Token);
+                        return;
+                    }
+                    _memory.Add(fact);
+                    Log.Info($"remember: {fact}");
+                    await _voice.SpeakAsync("Hecho, lo recordaré.", _cts.Token);
+                    return;
+                }
+
+                case "forget":
+                {
+                    var query = (action.Target ?? "").Trim();
+                    if (string.IsNullOrWhiteSpace(query))
+                    {
+                        await _voice.SpeakAsync("¿Qué quieres que olvide?", _cts.Token);
+                        return;
+                    }
+                    var removed = await Task.Run(() => _memory.Forget(query));
+                    Log.Info($"forget «{query}» → {removed ?? "(nada)"}");
+                    await _voice.SpeakAsync(
+                        removed is null ? $"No encontré nada guardado sobre «{query}»." : "Olvidado.",
+                        _cts.Token);
                     return;
                 }
             }

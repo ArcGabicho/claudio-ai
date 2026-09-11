@@ -7,6 +7,7 @@ using ClaudioAi.Actions;
 using ClaudioAi.Audio;
 using ClaudioAi.Brain;
 using ClaudioAi.Diagnostics;
+using ClaudioAi.Memory;
 using ClaudioAi.Projects;
 using ClaudioAi.Speech;
 using ClaudioAi.Tray;
@@ -164,10 +165,47 @@ static class Program
                 return result.Ok ? 0 : 1;
             }
 
+            case "--decide" when args.Length > 1:
+            {
+                var brain = new ClaudeBrain(cfg, new MemoryStore(cfg));
+                var action = await brain.DecideAsync(args[1]);
+                Console.WriteLine($"{action.Action} | target={action.Target} | say={action.Say}");
+                return 0;
+            }
+
             case "--web" when args.Length > 1:
             {
-                var brain = new ClaudeBrain(cfg);
+                var brain = new ClaudeBrain(cfg, new MemoryStore(cfg));
                 Console.WriteLine(await brain.AnswerFromWebAsync(args[1]));
+                return 0;
+            }
+
+            case "--memory":
+            {
+                var all = new MemoryStore(cfg).LoadAll();
+                if (all.Count == 0) { Console.WriteLine("(vacía)"); return 0; }
+                foreach (var line in all) Console.WriteLine($"- {line}");
+                return 0;
+            }
+
+            case "--remember" when args.Length > 1:
+            {
+                new MemoryStore(cfg).Add(args[1]);
+                Console.WriteLine("guardado.");
+                return 0;
+            }
+
+            case "--forget" when args.Length > 1:
+            {
+                var removed = new MemoryStore(cfg).Forget(args[1]);
+                Console.WriteLine(removed is null ? "(no encontré nada parecido)" : $"borrado: {removed}");
+                return removed is null ? 1 : 0;
+            }
+
+            case "--memory-clear":
+            {
+                new MemoryStore(cfg).Clear();
+                Console.WriteLine("memoria borrada.");
                 return 0;
             }
 
@@ -188,7 +226,8 @@ static class Program
                 Console.WriteLine(
                     "Uso: claudio [--transcribe <wav> | --record [seg] | --listen | --hear [seg] | " +
                     "--say <texto> | --do <json> | --projects | --match <texto> | --new-project <nombre> | " +
-                    "--clone-repo <owner/repo> | --web <pregunta> | --recognizers]");
+                    "--clone-repo <owner/repo> | --decide <orden> | --web <pregunta> | --memory | " +
+                    "--remember <texto> | --forget <texto> | --memory-clear | --recognizers]");
                 return 1;
         }
     }

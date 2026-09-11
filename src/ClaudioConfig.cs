@@ -84,6 +84,9 @@ public sealed record ClaudioConfig
     /// <summary>Usuario de GitHub por defecto cuando se dice "mi repo X" sin indicar de quién es.</summary>
     public string GitHubUsername { get; init; } = "ArcGabicho";
 
+    /// <summary>Notas máximas que guarda la memoria persistente antes de olvidar las más antiguas.</summary>
+    public int MaxMemoryEntries { get; init; } = 200;
+
     /// <summary>~/.local/share/claudio-ai — datos persistentes (modelos descargados, log, etc.).</summary>
     public static string DataDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -130,6 +133,7 @@ public sealed record ClaudioConfig
             WslDistro              = Env("CLAUDIO_WSL_DISTRO")       ?? cfg.WslDistro,
             WslProjectRoot         = Env("CLAUDIO_WSL_PROJECT_ROOT") ?? cfg.WslProjectRoot,
             GitHubUsername         = Env("CLAUDIO_GITHUB_USERNAME")  ?? cfg.GitHubUsername,
+            MaxMemoryEntries       = EnvInt("CLAUDIO_MAX_MEMORY")    ?? cfg.MaxMemoryEntries,
         };
     }
 

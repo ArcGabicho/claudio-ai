@@ -143,6 +143,27 @@ y sin abrir el navegador. Si en cambio quieres navegar tú mismo, pídele que
 
 Pruébalo sin voz con `dotnet run -c Release -- --web "tu pregunta"`.
 
+### Memoria persistente
+
+**"Claudio, recuerda que la wifi de invitados es Casa2024"** — guarda la nota
+en `%LOCALAPPDATA%\claudio-ai\memory.md` (texto plano, una nota por línea,
+editable a mano) y la tiene en cuenta en **todas** las conversaciones futuras,
+aunque cierres Claudio o reinicies el PC. Luego, **"Claudio, cuál es la wifi de
+invitados"** te la dice sin que tengas que repetírsela. **"Claudio, olvida lo
+de la wifi de invitados"** la borra (busca por parecido, no hace falta decirlo
+exacto). Se guardan como mucho `maxMemoryEntries` notas (200 por defecto);
+al llegar al límite se olvidan las más antiguas.
+
+Diagnósticos sin voz:
+
+```powershell
+dotnet run -c Release -- --memory                    # lista todo lo guardado
+dotnet run -c Release -- --remember "texto"           # añade una nota directamente
+dotnet run -c Release -- --forget "de qué trataba"    # borra la que mejor encaje
+dotnet run -c Release -- --memory-clear               # la vacía entera
+dotnet run -c Release -- --decide "una orden hablada" # qué acción y respuesta decidiría Claude (sin ejecutarla)
+```
+
 Menú del icono (clic derecho):
 
 | Opción | Qué hace |
@@ -173,6 +194,8 @@ dotnet run -c Release -- --match "claudio ai"                  # a qué proyecto
 dotnet run -c Release -- --new-project "mi proyecto"           # crea carpeta + git init + primer commit
 dotnet run -c Release -- --clone-repo "ArcGabicho/claudio-ai"  # clona un repositorio a Proyectos
 dotnet run -c Release -- --web "tu pregunta"                   # busca en internet y responde en texto
+dotnet run -c Release -- --decide "una orden hablada"          # qué acción tomaría Claude, sin ejecutarla
+dotnet run -c Release -- --memory                              # lista las notas guardadas
 ```
 
 `--hear` es el más útil para ajustar el micrófono: si transcribe ruido de fondo
@@ -202,6 +225,7 @@ como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
 | `wslDistro`              | `archlinux` | distro de WSL donde también se buscan proyectos; vacío para desactivar |
 | `wslProjectRoot`         | `~/Proyectos` | carpeta dentro de esa distro; `~` se resuelve al `$HOME` real  |
 | `gitHubUsername`         | `ArcGabicho` | usuario de GitHub por defecto para "clona mi repo X"            |
+| `maxMemoryEntries`       | `200`       | notas máximas en la memoria persistente antes de olvidar las más antiguas |
 
 `projectWindowsRoots` (no aparece en `appsettings.json` por defecto) son las
 carpetas de Windows donde se buscan proyectos; por defecto
@@ -234,6 +258,7 @@ src/
   Projects/ProjectResolver.cs    busca proyectos reales (Windows + WSL), empareja el nombre dicho y los abre
   Projects/ProjectRef.cs         nombre/tipo/ruta de un proyecto encontrado
   Projects/GitOps.cs             crea proyectos locales y clona repositorios (solo git, sin gh)
+  Memory/MemoryStore.cs          notas persistentes ("recuerda que...") en memory.md, entre reinicios
 ```
 
 ### Acción `shell`
@@ -254,3 +279,6 @@ debe estar en una lista blanca (`Get-Date`, `Get-CimInstance`, `Get-Volume`,
 6. ~~TTS de calidad con Piper~~ — hecho, con voz masculina grave por defecto.
 7. ~~Crear/clonar proyectos por voz~~ — hecho para Windows, solo con `git` (sin GitHub CLI); falta soporte para WSL.
 8. ~~Responder preguntas buscando en internet~~ — hecho (`web_answer`, vía las herramientas de Claude Code).
+9. ~~Memoria persistente entre reinicios~~ — hecho (`remember`/`forget`, `Memory/MemoryStore.cs`).
+10. **Interrumpirlo mientras habla** ("Claudio, para") — pendiente.
+11. **Control de sistema y multimedia**: volumen, brillo, play/pausa, bloquear/apagar/reiniciar (con confirmación), captura de pantalla — pendiente.
