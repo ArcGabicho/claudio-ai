@@ -57,6 +57,20 @@ public sealed record ClaudioConfig
     /// <summary>En la primera ejecución, registra a Claudio para arrancar con Windows.</summary>
     public bool StartWithWindows { get; init; } = true;
 
+    // ─── Proyectos ("Claudio, abre el proyecto X") ───────────────────────────
+
+    /// <summary>Carpetas de Windows bajo las que se buscan proyectos.</summary>
+    public string[] ProjectWindowsRoots { get; init; } =
+    [
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "OneDrive", "Documents", "Proyectos"),
+    ];
+
+    /// <summary>Distro de WSL donde también se buscan proyectos; vacío para no usar WSL.</summary>
+    public string WslDistro { get; init; } = "archlinux";
+
+    /// <summary>Carpeta dentro de esa distro bajo la que se buscan proyectos ("~" se resuelve al $HOME real).</summary>
+    public string WslProjectRoot { get; init; } = "~/Proyectos";
+
     /// <summary>~/.local/share/claudio-ai — datos persistentes (modelos descargados, log, etc.).</summary>
     public static string DataDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -98,6 +112,8 @@ public sealed record ClaudioConfig
             MaxCommandSeconds      = EnvInt("CLAUDIO_MAX_COMMAND_SECONDS") ?? cfg.MaxCommandSeconds,
             NoSpeechTimeoutSeconds = EnvInt("CLAUDIO_NO_SPEECH_SECONDS") ?? cfg.NoSpeechTimeoutSeconds,
             StartWithWindows       = EnvBool("CLAUDIO_START_WITH_WINDOWS") ?? cfg.StartWithWindows,
+            WslDistro              = Env("CLAUDIO_WSL_DISTRO")       ?? cfg.WslDistro,
+            WslProjectRoot         = Env("CLAUDIO_WSL_PROJECT_ROOT") ?? cfg.WslProjectRoot,
         };
     }
 

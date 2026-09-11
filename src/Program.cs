@@ -7,6 +7,7 @@ using ClaudioAi.Actions;
 using ClaudioAi.Audio;
 using ClaudioAi.Brain;
 using ClaudioAi.Diagnostics;
+using ClaudioAi.Projects;
 using ClaudioAi.Speech;
 using ClaudioAi.Tray;
 
@@ -132,6 +133,23 @@ static class Program
                 return 0;
             }
 
+            case "--projects":
+            {
+                var resolver = new ProjectResolver(cfg);
+                var all = resolver.ListAll();
+                if (all.Count == 0) { Console.WriteLine("No encontré ningún proyecto."); return 0; }
+                foreach (var p in all) Console.WriteLine($"{p.Name}  [{p.Kind}]  {p.Path}");
+                return 0;
+            }
+
+            case "--match" when args.Length > 1:
+            {
+                var matches = new ProjectResolver(cfg).Match(args[1]);
+                if (matches.Count == 0) { Console.WriteLine("(sin coincidencias)"); return 0; }
+                foreach (var m in matches) Console.WriteLine($"{m.Name}  [{m.Kind}]  {m.Path}");
+                return 0;
+            }
+
             case "--recognizers":
             {
                 var installed = System.Speech.Recognition.SpeechRecognitionEngine.InstalledRecognizers();
@@ -147,8 +165,8 @@ static class Program
 
             default:
                 Console.WriteLine(
-                    "Uso: claudio [--transcribe <wav> | --record [seg] | --listen | " +
-                    "--hear [seg] | --say <texto> | --do <json> | --recognizers]");
+                    "Uso: claudio [--transcribe <wav> | --record [seg] | --listen | --hear [seg] | " +
+                    "--say <texto> | --do <json> | --projects | --recognizers]");
                 return 1;
         }
     }

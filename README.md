@@ -58,6 +58,25 @@ sistema** (círculo azul = escuchando). Di **"Claudio, qué hora es"** o
 pone verde mientras te escucha y ámbar mientras piensa/responde. Si dices solo
 "Claudio" a secas, se queda en verde esperando la orden en la frase siguiente.
 
+### Abrir un proyecto por voz
+
+**"Claudio, abre el proyecto claudio-ai"** — Claudio no adivina la ruta: busca
+de verdad las carpetas que hay bajo `OneDrive\Documents\Proyectos` y bajo
+`~/Proyectos` de la distro WSL configurada, y compara lo que dijiste contra los
+nombres reales (tolera acentos, mayúsculas y transcripciones imperfectas). Con
+`dotnet run -c Release -- --projects` ves qué encuentra, y con `--match "nombre"`
+compruebas a qué proyecto resolvería una frase concreta.
+
+- Si dices con qué abrirlo ("…**con Visual Studio Code**", "…**con Claude Code**",
+  "…**con los dos**"), lo abre directo.
+- Si no lo dices, Claudio **pregunta** ("¿con Visual Studio Code, con Claude Code,
+  o con los dos?") y espera tu respuesta en la frase siguiente.
+- Si el nombre es ambiguo (dos proyectos muy parecidos, uno en Windows y otro en
+  WSL), primero pregunta cuál de los dos.
+- Claude Code en un proyecto de WSL requiere tener el CLI `claude` instalado
+  **dentro** de esa distro; si no está, Claudio te avisa por voz en vez de abrir
+  una terminal con un error.
+
 Menú del icono (clic derecho):
 
 | Opción | Qué hace |
@@ -83,6 +102,8 @@ dotnet run -c Release -- --record 5                           # grabar 5 s y gua
 dotnet run -c Release -- --listen                              # graba una frase con fin automático y la transcribe
 dotnet run -c Release -- --say "hola, esto es una prueba"      # probar la voz de salida
 dotnet run -c Release -- --do '{\"action\":\"shell\",\"target\":\"Get-Date\",\"say\":\"\"}'  # probar una acción
+dotnet run -c Release -- --projects                            # lista los proyectos encontrados (Windows + WSL)
+dotnet run -c Release -- --match "claudio ai"                  # a qué proyecto(s) resolvería ese nombre
 ```
 
 `--hear` es el más útil para ajustar el micrófono: si transcribe ruido de fondo
@@ -107,6 +128,13 @@ como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
 | `noSpeechTimeoutSeconds` | `4`         | tras decir "Claudio" solo, segundos que se espera la orden       |
 | `startWithWindows`       | `true`      | arrancar con Windows la primera vez que se ejecuta               |
 | `recordSeconds`          | `6`         | solo para el diagnóstico `--record`                              |
+| `wslDistro`              | `archlinux` | distro de WSL donde también se buscan proyectos; vacío para desactivar |
+| `wslProjectRoot`         | `~/Proyectos` | carpeta dentro de esa distro; `~` se resuelve al `$HOME` real  |
+
+`projectWindowsRoots` (no aparece en `appsettings.json` por defecto) son las
+carpetas de Windows donde se buscan proyectos; por defecto
+`OneDrive\Documents\Proyectos` del usuario actual. Para añadir más carpetas o
+cambiarla, añade la clave con una lista de rutas.
 
 Cualquier valor se puede sobreescribir con variables `CLAUDIO_*`
 (`CLAUDIO_WHISPER_MODEL=small`, `CLAUDIO_TTS=sapi`, `CLAUDIO_WAKE_WORD=Jarvis`,
@@ -131,6 +159,8 @@ src/
   Tray/Autostart.cs              arranque con Windows (registro HKCU\...\Run)
   Tray/TrayIconFactory.cs        dibuja el icono de la bandeja (sin ficheros .ico)
   Tray/SystemChime.cs            avisos sonoros del sistema
+  Projects/ProjectResolver.cs    busca proyectos reales (Windows + WSL), empareja el nombre dicho y los abre
+  Projects/ProjectRef.cs         nombre/tipo/ruta de un proyecto encontrado
 ```
 
 ### Acción `shell`

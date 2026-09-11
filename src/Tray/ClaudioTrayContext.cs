@@ -5,6 +5,7 @@ using ClaudioAi.Actions;
 using ClaudioAi.Audio;
 using ClaudioAi.Brain;
 using ClaudioAi.Diagnostics;
+using ClaudioAi.Projects;
 using ClaudioAi.Speech;
 
 namespace ClaudioAi.Tray;
@@ -30,6 +31,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
     readonly ContinuousListener _listener;
     readonly ClaudeBrain _brain;
     readonly ActionRouter _router;
+    readonly ProjectResolver _projects;
     readonly Voice _voice;
 
     readonly CancellationTokenSource _cts = new();
@@ -38,6 +40,12 @@ public sealed class ClaudioTrayContext : ApplicationContext
     volatile bool _disposed;
     volatile bool _awaitingCommand;
     DateTime _awaitDeadline;
+    PendingClarification? _pending;
+
+    enum ClarifyKind { Tool, ProjectChoice }
+
+    sealed record PendingClarification(
+        ClarifyKind Kind, IReadOnlyList<ProjectRef> Candidates, string? Tool, DateTime Deadline, int Attempt = 0);
 
     public ClaudioTrayContext(ClaudioConfig cfg)
     {
@@ -55,6 +63,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         _listener = new ContinuousListener(cfg, _stt);
         _brain = new ClaudeBrain(cfg);
         _router = new ActionRouter();
+        _projects = new ProjectResolver(cfg);
         _voice = new Voice(cfg.TtsEngine, cfg.PiperModel);
 
         _icons = Enum.GetValues<TrayState>().ToDictionary(s => s, TrayIconFactory.Create);
@@ -126,6 +135,15 @@ public sealed class ClaudioTrayContext : ApplicationContext
     {
         try
         {
+            // ¿Es la respuesta a una aclaración pendiente ("¿con qué lo abro?", "¿cuál de los dos?")?
+            if (_pending is { } pending && DateTime.UtcNow <= pending.Deadline)
+            {
+                _pending = null;
+                await HandlePendingReplyAsync(pending, text);
+                return;
+            }
+            _pending = null;
+
             // ¿Es la orden que esperábamos tras un "Claudio" dicho suelto?
             if (_awaitingCommand && DateTime.UtcNow <= _awaitDeadline)
             {
@@ -185,6 +203,16 @@ public sealed class ClaudioTrayContext : ApplicationContext
             var action = await _brain.DecideAsync(command, _cts.Token);
             Log.Info($"Acción: {action.Action}" + (action.Target is null ? "" : $" → {action.Target}"));
 
+            if (action.Action == "open_project")
+            {
+                var (tool, spoken) = ParseProjectTarget(action.Target);
+                if (string.IsNullOrWhiteSpace(spoken))
+                    await _voice.SpeakAsync("¿Qué proyecto quieres que abra?", _cts.Token);
+                else
+                    await ResolveAndActAsync(_projects.Match(spoken), tool, spoken);
+                return;
+            }
+
             var result = await _router.ExecuteAsync(action, _cts.Token);
             var toSay = action.Action == "shell" && !string.IsNullOrWhiteSpace(result)
                 ? $"{action.Say} {result}".Trim()
@@ -204,9 +232,154 @@ public sealed class ClaudioTrayContext : ApplicationContext
             await Task.Delay(300);                   // deja pasar el eco de la propia voz
             _listener.Muted = false;
             _turnLock.Release();
-            if (!_paused && !_disposed)
+            if (!_paused && !_disposed && _pending is null)
                 SetState(TrayState.Idle, $"Claudio — escuchando «{_cfg.WakeWord}»");
         }
+    }
+
+    /// <summary>Con los candidatos ya resueltos, abre directamente, pide desambiguar o pregunta la herramienta.</summary>
+    async Task ResolveAndActAsync(IReadOnlyList<ProjectRef> matches, string? tool, string spokenForError)
+    {
+        if (matches.Count == 0)
+        {
+            await _voice.SpeakAsync($"No encontré ningún proyecto llamado «{spokenForError}».", _cts.Token);
+            return;
+        }
+
+        if (matches.Count > 1)
+        {
+            var options = string.Join(", ", matches.Select(m => $"{m.Name} en {KindLabel(m.Kind)}"));
+            _pending = new PendingClarification(ClarifyKind.ProjectChoice, matches, tool, DateTime.UtcNow.AddSeconds(12));
+            SetState(TrayState.Listening, "Claudio — ¿cuál de todos?");
+            await _voice.SpeakAsync($"Encontré varios: {options}. ¿Cuál quieres?", _cts.Token);
+            return;
+        }
+
+        var project = matches[0];
+        if (tool is null)
+        {
+            _pending = new PendingClarification(ClarifyKind.Tool, matches, null, DateTime.UtcNow.AddSeconds(12));
+            SetState(TrayState.Listening, "Claudio — ¿con qué lo abro?");
+            await _voice.SpeakAsync(
+                $"¿Abro {project.Name} con Visual Studio Code, con Claude Code, o con los dos?", _cts.Token);
+            return;
+        }
+
+        await _voice.SpeakAsync(await Task.Run(() => _projects.Open(project, tool)), _cts.Token);
+    }
+
+    async Task HandlePendingReplyAsync(PendingClarification pending, string text)
+    {
+        if (!await _turnLock.WaitAsync(0)) return;
+
+        try
+        {
+            _listener.Muted = true;
+            SetState(TrayState.Busy, "Claudio — pensando…");
+
+            if (pending.Kind == ClarifyKind.Tool)
+            {
+                var tool = ParseToolKeyword(text);
+                if (tool is null)
+                {
+                    await RetryOrGiveUpAsync(pending, "¿Visual Studio Code, Claude Code, o los dos?");
+                    return;
+                }
+                Log.Info($"Herramienta elegida: {tool} para {pending.Candidates[0].Name}");
+                await _voice.SpeakAsync(await Task.Run(() => _projects.Open(pending.Candidates[0], tool)), _cts.Token);
+                return;
+            }
+
+            var chosen = ParseProjectChoice(text, pending.Candidates);
+            if (chosen is null)
+            {
+                await RetryOrGiveUpAsync(pending, "No supe cuál de esos. ¿Cuál quieres?");
+                return;
+            }
+
+            Log.Info($"Proyecto elegido: {chosen.Name} ({chosen.Kind})");
+            if (pending.Tool is null)
+            {
+                _pending = new PendingClarification(ClarifyKind.Tool, [chosen], null, DateTime.UtcNow.AddSeconds(12));
+                SetState(TrayState.Listening, "Claudio — ¿con qué lo abro?");
+                await _voice.SpeakAsync(
+                    $"¿Abro {chosen.Name} con Visual Studio Code, con Claude Code, o con los dos?", _cts.Token);
+                return;
+            }
+
+            await _voice.SpeakAsync(await Task.Run(() => _projects.Open(chosen, pending.Tool)), _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Error("Error al resolver una aclaración", ex);
+            try { await _voice.SpeakAsync("Ha habido un error.", CancellationToken.None); } catch { }
+        }
+        finally
+        {
+            await Task.Delay(300);
+            _listener.Muted = false;
+            _turnLock.Release();
+            if (!_paused && !_disposed && _pending is null)
+                SetState(TrayState.Idle, $"Claudio — escuchando «{_cfg.WakeWord}»");
+        }
+    }
+
+    async Task RetryOrGiveUpAsync(PendingClarification pending, string question)
+    {
+        if (pending.Attempt >= 1)
+        {
+            await _voice.SpeakAsync("Vale, lo dejo.", _cts.Token);
+            return;
+        }
+        _pending = pending with { Deadline = DateTime.UtcNow.AddSeconds(10), Attempt = pending.Attempt + 1 };
+        SetState(TrayState.Listening, "Claudio — ¿cómo dices?");
+        await _voice.SpeakAsync($"No te he entendido. {question}", _cts.Token);
+    }
+
+    static string KindLabel(ProjectKind kind) => kind == ProjectKind.Windows ? "Windows" : "WSL";
+
+    /// <summary>Separa el prefijo "herramienta:" (vscode|claude|both) que puede venir en target.</summary>
+    static (string? tool, string name) ParseProjectTarget(string? target)
+    {
+        target ??= "";
+        var idx = target.IndexOf(':');
+        if (idx > 0)
+        {
+            var t = target[..idx].Trim().ToLowerInvariant();
+            if (t is "vscode" or "claude" or "both")
+                return (t, target[(idx + 1)..].Trim());
+        }
+        return (null, target.Trim());
+    }
+
+    static string? ParseToolKeyword(string text)
+    {
+        var n = ProjectResolver.Normalize(text);
+        bool Has(string s) => n.Contains(s, StringComparison.Ordinal);
+
+        var wantsCode = Has("vscode") || Has("vs code") || Has("visual studio") || Has("codigo") || Has("editor");
+        var wantsClaude = Has("claude");
+        if (Has("los dos") || Has("ambos") || Has("las dos") || (wantsCode && wantsClaude)) return "both";
+        if (wantsCode) return "vscode";
+        if (wantsClaude) return "claude";
+        return null;
+    }
+
+    static ProjectRef? ParseProjectChoice(string text, IReadOnlyList<ProjectRef> candidates)
+    {
+        var n = ProjectResolver.Normalize(text);
+        if (n.Contains("windows", StringComparison.Ordinal))
+            return candidates.FirstOrDefault(c => c.Kind == ProjectKind.Windows);
+        if (n.Contains("wsl", StringComparison.Ordinal) || n.Contains("linux", StringComparison.Ordinal) ||
+            n.Contains("arch", StringComparison.Ordinal))
+            return candidates.FirstOrDefault(c => c.Kind == ProjectKind.Wsl);
+
+        var best = candidates
+            .Select(c => (c, score: ProjectResolver.Similarity(n, ProjectResolver.Normalize(c.Name))))
+            .OrderByDescending(t => t.score)
+            .FirstOrDefault();
+        return best.score >= 0.5 ? best.c : null;
     }
 
     bool TryStripWake(string text, out string command)
@@ -254,6 +427,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
 
         _paused = !_paused;
         _awaitingCommand = false;
+        _pending = null;
         if (_paused)
         {
             _listener.Stop();
