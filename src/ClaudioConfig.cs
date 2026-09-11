@@ -71,6 +71,9 @@ public sealed record ClaudioConfig
     /// <summary>Carpeta dentro de esa distro bajo la que se buscan proyectos ("~" se resuelve al $HOME real).</summary>
     public string WslProjectRoot { get; init; } = "~/Proyectos";
 
+    /// <summary>Usuario de GitHub por defecto cuando se dice "mi repo X" sin indicar de quién es.</summary>
+    public string GitHubUsername { get; init; } = "ArcGabicho";
+
     /// <summary>~/.local/share/claudio-ai — datos persistentes (modelos descargados, log, etc.).</summary>
     public static string DataDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -114,6 +117,7 @@ public sealed record ClaudioConfig
             StartWithWindows       = EnvBool("CLAUDIO_START_WITH_WINDOWS") ?? cfg.StartWithWindows,
             WslDistro              = Env("CLAUDIO_WSL_DISTRO")       ?? cfg.WslDistro,
             WslProjectRoot         = Env("CLAUDIO_WSL_PROJECT_ROOT") ?? cfg.WslProjectRoot,
+            GitHubUsername         = Env("CLAUDIO_GITHUB_USERNAME")  ?? cfg.GitHubUsername,
         };
     }
 

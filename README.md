@@ -77,6 +77,40 @@ compruebas a qué proyecto resolvería una frase concreta.
   **dentro** de esa distro; si no está, Claudio te avisa por voz en vez de abrir
   una terminal con un error.
 
+### Crear, clonar y publicar en GitHub por voz
+
+Requiere el **CLI de GitHub** (`gh`) instalado y autenticado, solo para *crear*
+repositorios (clonar y crear proyectos locales no lo necesitan):
+
+```powershell
+winget install GitHub.cli
+gh auth login
+```
+
+Comprueba el estado con `dotnet run -c Release -- --gh-status`.
+
+- **"Claudio, crea un proyecto llamado tienda online"** — crea la carpeta en
+  `OneDrive\Documents\Proyectos\tienda-online` con `git init` y un primer
+  commit. Solo local, no toca tu GitHub.
+- **"Claudio, clona claudio-ai de ArcGabicho"** / **"clona mi repo X"** — clona
+  ese repositorio a tu carpeta de Proyectos. Si no dices de quién es, usa el
+  usuario configurado en `gitHubUsername`.
+- **"Claudio, sube tienda online a GitHub"** / **"publica tienda online como
+  privado"** — para un proyecto que **ya existe en disco**: si ya tiene un
+  repositorio remoto, solo hace `push`; si no, lo crea con `gh` y sube el
+  código. **Antes de tocar tu GitHub, Claudio siempre repite en voz alta lo
+  que va a hacer y pide un «sí» explícito** — esto no se puede desactivar. Si
+  no dijiste si es público o privado, primero te lo pregunta.
+
+De momento estas tres acciones solo operan sobre proyectos de **Windows**
+(no WSL). Puedes probarlas sin usar la voz:
+
+```powershell
+dotnet run -c Release -- --new-project "mi proyecto"
+dotnet run -c Release -- --clone-repo "ArcGabicho/claudio-ai"
+dotnet run -c Release -- --publish-repo "mi proyecto" private
+```
+
 Menú del icono (clic derecho):
 
 | Opción | Qué hace |
@@ -104,6 +138,10 @@ dotnet run -c Release -- --say "hola, esto es una prueba"      # probar la voz d
 dotnet run -c Release -- --do '{\"action\":\"shell\",\"target\":\"Get-Date\",\"say\":\"\"}'  # probar una acción
 dotnet run -c Release -- --projects                            # lista los proyectos encontrados (Windows + WSL)
 dotnet run -c Release -- --match "claudio ai"                  # a qué proyecto(s) resolvería ese nombre
+dotnet run -c Release -- --new-project "mi proyecto"           # crea carpeta + git init + primer commit
+dotnet run -c Release -- --clone-repo "ArcGabicho/claudio-ai"  # clona un repositorio a Proyectos
+dotnet run -c Release -- --publish-repo "mi proyecto" private  # crea el repo en GitHub (o push si ya existe)
+dotnet run -c Release -- --gh-status                           # si el CLI de GitHub está instalado y autenticado
 ```
 
 `--hear` es el más útil para ajustar el micrófono: si transcribe ruido de fondo
@@ -130,6 +168,7 @@ como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
 | `recordSeconds`          | `6`         | solo para el diagnóstico `--record`                              |
 | `wslDistro`              | `archlinux` | distro de WSL donde también se buscan proyectos; vacío para desactivar |
 | `wslProjectRoot`         | `~/Proyectos` | carpeta dentro de esa distro; `~` se resuelve al `$HOME` real  |
+| `gitHubUsername`         | `ArcGabicho` | usuario de GitHub por defecto para "clona mi repo X"            |
 
 `projectWindowsRoots` (no aparece en `appsettings.json` por defecto) son las
 carpetas de Windows donde se buscan proyectos; por defecto
@@ -161,6 +200,7 @@ src/
   Tray/SystemChime.cs            avisos sonoros del sistema
   Projects/ProjectResolver.cs    busca proyectos reales (Windows + WSL), empareja el nombre dicho y los abre
   Projects/ProjectRef.cs         nombre/tipo/ruta de un proyecto encontrado
+  Projects/GitHubOps.cs          crea/clona proyectos y publica en GitHub (git + gh)
 ```
 
 ### Acción `shell`
@@ -179,3 +219,4 @@ debe estar en una lista blanca (`Get-Date`, `Get-CimInstance`, `Get-Volume`,
 4. ~~Servicio en segundo plano que arranque con la sesión~~ — hecho (bandeja + `HKCU\...\Run`).
 5. Detector de activación dedicado (Porcupine) si la carga de Whisper en continuo pesa demasiado.
 6. TTS de calidad con Piper y voz española fija.
+7. ~~Crear/clonar/publicar proyectos en GitHub por voz~~ — hecho para Windows; falta soporte para WSL.
