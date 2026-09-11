@@ -353,3 +353,7 @@ debe estar en una lista blanca (`Get-Date`, `Get-CimInstance`, `Get-Volume`,
 11. **Control de sistema y multimedia**: volumen, brillo, play/pausa, bloquear/apagar/reiniciar (con confirmación), captura de pantalla — pendiente.
 12. ~~Escucha con GPU y modelo grande~~ — hecho: `large-v3-turbo` por defecto, con aceleración CUDA 12 automática (~0.3 s por segundo de audio con GPU, frente a los ~9 s en CPU).
 13. ~~Voz de nivel cinematográfico~~ — hecho: soporte para ElevenLabs (`ttsEngine: elevenlabs`), de pago y opcional.
+
+## Licencia
+
+[MIT](LICENSE.md) © 2026 ArcGabicho
