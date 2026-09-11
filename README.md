@@ -1,19 +1,26 @@
 # Claudio · asistente de voz para Windows 11
 
-MVP de un asistente tipo Jarvis en **C# / .NET 10**. Escucha una orden por
-micrófono, la transcribe con Whisper (local), decide qué hacer con Claude y
-ejecuta la acción (abrir programas, buscar en la web, consultar el sistema),
-respondiendo de viva voz.
+MVP de un asistente tipo Jarvis en **C# / .NET 10**. Vive en la **bandeja del
+sistema**, escucha el micrófono todo el rato y, al oír **"Claudio, {orden}"**,
+transcribe con Whisper (local), decide qué hacer con Claude y ejecuta la acción
+(abrir programas, buscar en la web, consultar el sistema), respondiendo de viva
+voz. Arranca con Windows por defecto, como Discord.
 
 ## Pipeline
 
 ```
-ENTER → grabar        (NAudio, WAV 16 kHz mono 16-bit)
-      → transcribir    (Whisper.net, 100 % local)
-      → decidir        (CLI de Claude Code → JSON {action,target,say})
-      → ejecutar        (ActionRouter: open_app | web_search | shell)
-      → hablar          (SAPI / System.Speech; opcional: Piper)
+escucha continua  (NAudio + VAD por energía, trocea en frases)
+      → transcribir cada frase   (Whisper.net, 100 % local)
+      → ¿empieza por "Claudio"?  si no, se ignora
+      → decidir                 (CLI de Claude Code → JSON {action,target,say})
+      → ejecutar                 (ActionRouter: open_app | web_search | shell)
+      → hablar                   (SAPI / System.Speech; opcional: Piper)
 ```
+
+La palabra de activación se detecta sobre el propio texto de Whisper (no con el
+reconocedor de voz de Windows: Windows 11 ya no trae el motor clásico que
+necesita `System.Speech.Recognition`). Es más pesado que un detector dedicado,
+pero funciona 100 % offline y sin dependencias nuevas.
 
 El "cerebro" usa el **CLI de `claude`**, que va cubierto por la suscripción
 Claude Pro/Max. Para pasar a un servicio siempre-activo se sustituye
@@ -41,47 +48,89 @@ En la primera ejecución se descarga el modelo Whisper (`base`, ~142 MB) a
 ## Uso
 
 ```powershell
-dotnet run -c Release
+dotnet build -c Release
+.\bin\Release\net10.0-windows\claudio.exe
 ```
 
-Pulsa **ENTER**, habla durante la ventana de grabación (6 s por defecto) y
-espera la respuesta. `q` + ENTER para salir.
+No aparece ninguna consola: Claudio queda como un icono en la **bandeja del
+sistema** (círculo azul = escuchando). Di **"Claudio, qué hora es"** o
+**"Claudio, abre el navegador"** en voz alta desde cualquier sitio; el icono se
+pone verde mientras te escucha y ámbar mientras piensa/responde. Si dices solo
+"Claudio" a secas, se queda en verde esperando la orden en la frase siguiente.
 
-### Diagnósticos
+Menú del icono (clic derecho):
+
+| Opción | Qué hace |
+|---|---|
+| Pausar escucha / Reanudar | corta o retoma el micrófono (doble clic hace lo mismo) |
+| Iniciar con Windows | activa/desactiva el arranque automático (activado por defecto la primera vez) |
+| Ver registro… | abre `claudio.log` con el historial de activaciones y errores |
+| Salir | cierra Claudio |
+
+> **Importante:** el arranque automático registra la ruta del `.exe` que estés
+> ejecutando. Para que sobreviva a un `dotnet build` posterior, compílalo una
+> vez y déjalo en una carpeta estable (o publícalo con `dotnet publish`); si lo
+> mueves, vuelve a activar "Iniciar con Windows" desde el menú. Ejecutar con
+> `dotnet run` **no** se registra para el arranque (apunta a `dotnet.exe`).
+
+### Diagnósticos (con consola, útiles para calibrar)
 
 ```powershell
-dotnet run -c Release -- --transcribe C:\ruta\audio.wav      # solo transcribir un WAV
-dotnet run -c Release -- --record 5                          # grabar 5 s y guardar el WAV
-dotnet run -c Release -- --say "hola, esto es una prueba"     # probar la voz de salida
+dotnet run -c Release -- --hear 20                            # escucha 20 s e imprime cada frase que transcribe
+dotnet run -c Release -- --recognizers                        # lista reconocedores de System.Speech (informativo)
+dotnet run -c Release -- --transcribe C:\ruta\audio.wav       # solo transcribir un WAV
+dotnet run -c Release -- --record 5                           # grabar 5 s y guardar el WAV
+dotnet run -c Release -- --listen                              # graba una frase con fin automático y la transcribe
+dotnet run -c Release -- --say "hola, esto es una prueba"      # probar la voz de salida
 dotnet run -c Release -- --do '{\"action\":\"shell\",\"target\":\"Get-Date\",\"say\":\"\"}'  # probar una acción
 ```
 
+`--hear` es el más útil para ajustar el micrófono: si transcribe ruido de fondo
+como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
+`silenceMs`.
+
 ## Configuración — `appsettings.json`
 
-| Clave           | Por defecto | Notas                                        |
-|-----------------|-------------|----------------------------------------------|
-| `language`      | `es`        | idioma de transcripción y respuestas         |
-| `whisperModel`  | `base`      | `tiny` \| `base` \| `small` \| `medium`      |
-| `recordSeconds` | `6`         | duración fija de cada grabación (MVP)        |
-| `claudeCommand` | `claude`    | ejecutable del cerebro                        |
-| `ttsEngine`     | `auto`      | `auto` \| `sapi` \| `piper` \| `none`         |
-| `piperModel`    | `null`      | ruta al `.onnx` de Piper                      |
+| Clave                    | Por defecto | Notas                                                        |
+|--------------------------|-------------|---------------------------------------------------------------|
+| `language`               | `es`        | idioma de transcripción y respuestas                          |
+| `whisperModel`           | `base`      | `tiny` \| `base` \| `small` \| `medium` — `tiny` responde más rápido |
+| `claudeCommand`          | `claude`    | ejecutable del cerebro                                         |
+| `ttsEngine`              | `auto`      | `auto` \| `sapi` \| `piper` \| `none`                          |
+| `piperModel`             | `null`      | ruta al `.onnx` de Piper                                        |
+| `wakeWord`               | `Claudio`   | palabra que activa a Claudio                                    |
+| `wakeWordVariants`       | ver abajo   | grafías que Whisper suele usar para "Claudio" y también activan |
+| `chimeOnWake`            | `true`      | sonido del sistema al detectar la activación                    |
+| `silenceMs`              | `800`       | silencio (ms) que da por acabada una frase                      |
+| `silenceThreshold`       | `0.02`      | energía mínima (0..1) para considerar que hay voz                |
+| `maxCommandSeconds`      | `15`        | tope de duración de una frase/orden                              |
+| `noSpeechTimeoutSeconds` | `4`         | tras decir "Claudio" solo, segundos que se espera la orden       |
+| `startWithWindows`       | `true`      | arrancar con Windows la primera vez que se ejecuta               |
+| `recordSeconds`          | `6`         | solo para el diagnóstico `--record`                              |
 
 Cualquier valor se puede sobreescribir con variables `CLAUDIO_*`
-(`CLAUDIO_WHISPER_MODEL=small`, `CLAUDIO_TTS=sapi`, …).
+(`CLAUDIO_WHISPER_MODEL=small`, `CLAUDIO_TTS=sapi`, `CLAUDIO_WAKE_WORD=Jarvis`,
+`CLAUDIO_SILENCE_THRESHOLD=0.03`, `CLAUDIO_START_WITH_WINDOWS=false`, …).
 
 ## Estructura
 
 ```
 src/
-  Program.cs              bucle principal + diagnósticos (--transcribe, --record, --say, --do)
-  ClaudioConfig.cs        configuración (json + env)
-  Audio/AudioRecorder.cs  grabación con NAudio (WaveInEvent)
-  Audio/Voice.cs          texto a voz: SAPI (System.Speech) o Piper
-  Speech/SpeechToText.cs  Whisper.net + descarga del modelo
-  Brain/ClaudeBrain.cs    invoca el CLI de claude, parsea la acción
+  Program.cs                    arranque de la bandeja + diagnósticos (--hear, --listen, --say, --do, ...)
+  ClaudioConfig.cs               configuración (json + env)
+  Diagnostics/Log.cs             registro a %LOCALAPPDATA%\claudio-ai\claudio.log
+  Audio/AudioRecorder.cs         grabación de ventana fija (diagnóstico --record)
+  Audio/CommandCapture.cs        grabación de una frase con fin automático por silencio (diagnóstico --listen)
+  Audio/Voice.cs                 texto a voz: SAPI (System.Speech) o Piper
+  Speech/SpeechToText.cs         Whisper.net + descarga del modelo
+  Speech/ContinuousListener.cs   escucha continua + VAD + Whisper; detecta "Claudio, {orden}"
+  Brain/ClaudeBrain.cs           invoca el CLI de claude, parsea la acción
   Brain/AssistantAction.cs
-  Actions/ActionRouter.cs open_app | web_search | shell (PowerShell, lista blanca)
+  Actions/ActionRouter.cs        open_app | web_search | shell (PowerShell, lista blanca)
+  Tray/ClaudioTrayContext.cs     orquesta el turno completo; icono y menú de la bandeja
+  Tray/Autostart.cs              arranque con Windows (registro HKCU\...\Run)
+  Tray/TrayIconFactory.cs        dibuja el icono de la bandeja (sin ficheros .ico)
+  Tray/SystemChime.cs            avisos sonoros del sistema
 ```
 
 ### Acción `shell`
@@ -94,8 +143,9 @@ debe estar en una lista blanca (`Get-Date`, `Get-CimInstance`, `Get-Volume`,
 
 ## Roadmap
 
-1. **Wake word** ("Jarvis") con escucha continua y VAD, en vez de ENTER + duración fija.
-2. **Cerebro por API**: `ClaudeBrain` → SDK `Anthropic` con tool-calling real y *prompt caching*.
+1. ~~Wake word con escucha continua y VAD~~ — hecho (Whisper en vez de un detector dedicado).
+2. **Cerebro por API**: `ClaudeBrain` → SDK `Anthropic` con tool-calling real y *prompt caching* (bajaría la latencia del turno).
 3. **Más acciones**: control de ventanas, multimedia (SMTC), volumen/brillo, Telegram, correo, recordatorios.
-4. **Servicio en segundo plano** que arranque con la sesión de Windows.
-5. TTS de calidad con Piper y voz española fija.
+4. ~~Servicio en segundo plano que arranque con la sesión~~ — hecho (bandeja + `HKCU\...\Run`).
+5. Detector de activación dedicado (Porcupine) si la carga de Whisper en continuo pesa demasiado.
+6. TTS de calidad con Piper y voz española fija.
