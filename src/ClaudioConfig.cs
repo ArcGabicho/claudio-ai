@@ -12,8 +12,12 @@ public sealed record ClaudioConfig
     /// <summary>Idioma para la transcripción y las respuestas ("es", "en", ...).</summary>
     public string Language { get; init; } = "es";
 
-    /// <summary>Modelo Whisper: tiny | base | small | medium | large.</summary>
-    public string WhisperModel { get; init; } = "base";
+    /// <summary>
+    /// Modelo Whisper: tiny | base | small | medium | large-v3 | large-v3-turbo.
+    /// Con GPU NVIDIA (CUDA 12) disponible, large-v3-turbo va rápido y es mucho más
+    /// preciso que base; sin GPU, conviene bajar a small o base para no ir lento.
+    /// </summary>
+    public string WhisperModel { get; init; } = "large-v3-turbo";
 
     /// <summary>Segundos de la grabación del diagnóstico <c>--record</c> (el modo normal usa VAD).</summary>
     public int RecordSeconds { get; init; } = 6;
@@ -36,6 +40,19 @@ public sealed record ClaudioConfig
     /// rápida. No afecta a SAPI.
     /// </summary>
     public double PiperSpeedFactor { get; init; } = 1.0;
+
+    /// <summary>
+    /// Clave de API de ElevenLabs (solo si TtsEngine = elevenlabs). NUNCA la pongas en
+    /// appsettings.json: se lee exclusivamente de la variable de entorno
+    /// CLAUDIO_ELEVENLABS_API_KEY para no dejarla en un fichero que se pueda subir a git.
+    /// </summary>
+    public string? ElevenLabsApiKey { get; init; }
+
+    /// <summary>Id de la voz de ElevenLabs a usar (se elige en tu cuenta de ElevenLabs).</summary>
+    public string? ElevenLabsVoiceId { get; init; }
+
+    /// <summary>Modelo de ElevenLabs.</summary>
+    public string ElevenLabsModel { get; init; } = "eleven_multilingual_v2";
 
     // ─── Palabra de activación ────────────────────────────────────────────────
 
@@ -123,6 +140,9 @@ public sealed record ClaudioConfig
             PiperModel             = Env("CLAUDIO_PIPER_MODEL")      ?? cfg.PiperModel,
             PiperPath              = Env("CLAUDIO_PIPER_PATH")       ?? cfg.PiperPath,
             PiperSpeedFactor       = EnvDouble("CLAUDIO_PIPER_SPEED") ?? cfg.PiperSpeedFactor,
+            ElevenLabsApiKey       = Env("CLAUDIO_ELEVENLABS_API_KEY") ?? cfg.ElevenLabsApiKey,
+            ElevenLabsVoiceId      = Env("CLAUDIO_ELEVENLABS_VOICE_ID") ?? cfg.ElevenLabsVoiceId,
+            ElevenLabsModel        = Env("CLAUDIO_ELEVENLABS_MODEL") ?? cfg.ElevenLabsModel,
             WakeWord               = Env("CLAUDIO_WAKE_WORD")        ?? cfg.WakeWord,
             ChimeOnWake            = EnvBool("CLAUDIO_CHIME")        ?? cfg.ChimeOnWake,
             SilenceMs              = EnvInt("CLAUDIO_SILENCE_MS")    ?? cfg.SilenceMs,

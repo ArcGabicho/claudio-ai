@@ -14,7 +14,7 @@ escucha continua  (NAudio + VAD por energía, trocea en frases)
       → ¿empieza por "Claudio"?  si no, se ignora
       → decidir                 (CLI de Claude Code → JSON {action,target,say})
       → ejecutar                 (ActionRouter: open_app | web_search | web_answer | shell | ...)
-      → hablar                   (SAPI / System.Speech; opcional: Piper)
+      → hablar                   (SAPI / System.Speech; opcional: Piper o ElevenLabs)
 ```
 
 La palabra de activación se detecta sobre el propio texto de Whisper (no con el
@@ -40,8 +40,47 @@ key; el resto del código no cambia.
   — para que SAPI hable en español con acento nativo, instala una voz en
   *Configuración → Hora e idioma → Idioma y región → añade "Español"* → **Voz**.
 
-En la primera ejecución se descarga el modelo Whisper (`base`, ~142 MB) a
-`%LOCALAPPDATA%\claudio-ai\models\`.
+En la primera ejecución se descarga el modelo Whisper (`large-v3-turbo` por
+defecto, ~1.6 GB — la mejor precisión que ofrece Whisper sin perder demasiada
+velocidad) a `%LOCALAPPDATA%\claudio-ai\models\`.
+
+### Escucha rápida con GPU (NVIDIA)
+
+`large-v3-turbo` es mucho más preciso que `base`, pero en CPU va demasiado
+lento para hablar en tiempo real (~9 s por cada 1 s de audio en un portátil
+normal). Con una GPU NVIDIA y CUDA instalado, baja a **~0.3 s por segundo de
+audio** (medido con una RTX 3050 6 GB) — Claudio detecta el runtime de CUDA
+solo, sin tocar nada en el código ni en `appsettings.json`.
+
+**Importante:** el paquete de Whisper.net para GPU necesita el runtime de
+**CUDA 12.x** en concreto — instalar la versión más reciente (13.x) no sirve,
+aunque el driver ya la soporte, porque las DLL se llaman distinto
+(`cudart64_12.dll` frente a `cudart64_13.dll`) y no son intercambiables:
+
+```powershell
+winget install --id Nvidia.CUDA --version 12.9
+```
+
+Es el toolkit completo (varios GB) y pide permisos de administrador; si
+prefieres instalar solo lo imprescindible (sin el compilador, ejemplos ni
+documentación) y sin tocar el driver que ya tengas:
+
+```powershell
+$exe = "$env:TEMP\cuda_12.9.1.exe"
+Invoke-WebRequest "https://developer.download.nvidia.com/compute/cuda/12.9.1/local_installers/cuda_12.9.1_576.57_windows.exe" -OutFile $exe
+Start-Process $exe -ArgumentList "-s","cudart_12.9","cublas_12.9","cublas_dev_12.9" -Verb RunAs -Wait
+```
+
+Puedes tener a la vez CUDA 12.x y 13.x instalados sin conflicto — Claudio
+busca la carpeta `v12.*` que encuentre y la usa, sin necesidad de reiniciar
+Windows (aunque si ya tenías una terminal abierta, ábrela de nuevo para que
+el PATH del sistema también quede al día). Sin GPU o sin CUDA instalado, cae
+a CPU sola y sigue funcionando, pero conviene bajar a un modelo más pequeño —
+`whisperModel: "small"` va decente en CPU (~2× tiempo real); `base` es el más
+rápido de todos aunque menos preciso. Compara tiempos reales en tu máquina
+con `dotnet run -c Release -- --bench archivo.wav 3` (la primera pasada tras
+instalar CUDA es lenta porque la GPU compila y cachea sus kernels; las
+siguientes ya van a la velocidad real).
 
 ### Voz grave con Piper (opcional pero recomendado)
 
@@ -78,6 +117,33 @@ audio que genera Piper: por debajo de `1.0` la voz suena más grave y pausada
 Claudio, y ajusta el número a tu gusto — no hay una respuesta "correcta", es
 cuestión de oído. Otras voces masculinas de España para probar: `sharvard`,
 `carlfm` (mismo patrón de URL, cambiando el nombre).
+
+### Voz de nivel cinematográfico con ElevenLabs (de pago, opcional)
+
+Piper es gratis y offline; [ElevenLabs](https://elevenlabs.io) suena mucho
+más natural (voces reales entrenadas, no síntesis clásica) a cambio de una
+cuenta de pago y de que el texto que Claudio va a decir salga de tu equipo.
+Tienes que darte de alta tú (no puedo crear la cuenta por ti):
+
+1. Crea una cuenta en <https://elevenlabs.io> y saca una API key en
+   *Settings → API Keys*.
+2. Elige una voz de su biblioteca (*Voice Library*, busca algo grave/narrador)
+   y copia su **Voice ID**.
+3. Guarda la clave **solo** como variable de entorno de usuario (nunca en
+   `appsettings.json`, que está en git):
+   ```powershell
+   setx CLAUDIO_ELEVENLABS_API_KEY "tu-api-key"
+   ```
+   Ábrela en una terminal nueva para que se aplique.
+4. En `appsettings.json`:
+   ```json
+   "ttsEngine": "elevenlabs",
+   "elevenLabsVoiceId": "el-id-de-la-voz-que-elegiste"
+   ```
+
+Pruébalo con `dotnet run -c Release -- --say "texto de prueba"` — el motor de
+voz de la primera línea debe decir `elevenlabs`. `ttsEngine: "auto"` nunca la
+elige sola (es de pago): hay que pedirla explícitamente.
 
 ## Uso
 
@@ -196,6 +262,7 @@ dotnet run -c Release -- --clone-repo "ArcGabicho/claudio-ai"  # clona un reposi
 dotnet run -c Release -- --web "tu pregunta"                   # busca en internet y responde en texto
 dotnet run -c Release -- --decide "una orden hablada"          # qué acción tomaría Claude, sin ejecutarla
 dotnet run -c Release -- --memory                              # lista las notas guardadas
+dotnet run -c Release -- --bench audio.wav 3                   # tiempos de carga e inferencia de Whisper (CPU vs GPU)
 ```
 
 `--hear` es el más útil para ajustar el micrófono: si transcribe ruido de fondo
@@ -207,12 +274,14 @@ como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
 | Clave                    | Por defecto | Notas                                                        |
 |--------------------------|-------------|---------------------------------------------------------------|
 | `language`               | `es`        | idioma de transcripción y respuestas                          |
-| `whisperModel`           | `base`      | `tiny` \| `base` \| `small` \| `medium` — `tiny` responde más rápido |
+| `whisperModel`           | `large-v3-turbo` | `tiny` \| `base` \| `small` \| `medium` \| `large-v3` \| `large-v3-turbo` — más grande = más preciso y más lento; usa GPU si hay CUDA |
 | `claudeCommand`          | `claude`    | ejecutable del cerebro                                         |
-| `ttsEngine`              | `piper`     | `auto` \| `sapi` \| `piper` \| `none`                          |
+| `ttsEngine`              | `piper`     | `auto` \| `sapi` \| `piper` \| `elevenlabs` \| `none`           |
 | `piperModel`             | ver abajo   | ruta al `.onnx` de Piper                                        |
 | `piperPath`              | `piper`     | ruta al ejecutable de Piper (por defecto lo busca en el PATH)   |
 | `piperSpeedFactor`       | `1.0`       | `<1.0` = voz más grave y pausada; `>1.0` = más aguda y rápida   |
+| `elevenLabsVoiceId`      | `null`      | id de la voz de ElevenLabs (solo si `ttsEngine: elevenlabs`)    |
+| `elevenLabsModel`        | `eleven_multilingual_v2` | modelo de ElevenLabs a usar                        |
 | `wakeWord`               | `Claudio`   | palabra que activa a Claudio                                    |
 | `wakeWordVariants`       | ver abajo   | grafías que Whisper suele usar para "Claudio" y también activan |
 | `chimeOnWake`            | `true`      | sonido del sistema al detectar la activación                    |
@@ -246,7 +315,7 @@ src/
   Audio/AudioRecorder.cs         grabación de ventana fija (diagnóstico --record)
   Audio/CommandCapture.cs        grabación de una frase con fin automático por silencio (diagnóstico --listen)
   Audio/Voice.cs                 texto a voz: SAPI (System.Speech) o Piper
-  Speech/SpeechToText.cs         Whisper.net + descarga del modelo
+  Speech/SpeechToText.cs         Whisper.net + descarga del modelo; detecta y usa CUDA 12 si lo encuentra
   Speech/ContinuousListener.cs   escucha continua + VAD + Whisper; detecta "Claudio, {orden}"
   Brain/ClaudeBrain.cs           invoca el CLI de claude, parsea la acción
   Brain/AssistantAction.cs
@@ -282,3 +351,5 @@ debe estar en una lista blanca (`Get-Date`, `Get-CimInstance`, `Get-Volume`,
 9. ~~Memoria persistente entre reinicios~~ — hecho (`remember`/`forget`, `Memory/MemoryStore.cs`).
 10. **Interrumpirlo mientras habla** ("Claudio, para") — pendiente.
 11. **Control de sistema y multimedia**: volumen, brillo, play/pausa, bloquear/apagar/reiniciar (con confirmación), captura de pantalla — pendiente.
+12. ~~Escucha con GPU y modelo grande~~ — hecho: `large-v3-turbo` por defecto, con aceleración CUDA 12 automática (~0.3 s por segundo de audio con GPU, frente a los ~9 s en CPU).
+13. ~~Voz de nivel cinematográfico~~ — hecho: soporte para ElevenLabs (`ttsEngine: elevenlabs`), de pago y opcional.

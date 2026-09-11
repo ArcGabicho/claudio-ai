@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Speech.Synthesis;
 using NAudio.Wave;
 
@@ -11,15 +13,22 @@ namespace ClaudioAi.Audio;
 /// para una voz de más calidad. Con Piper, <see cref="_speedFactor"/> permite
 /// bajar el tono y la velocidad para una voz más grave y pausada, sin depender
 /// de ninguna librería de pitch-shift: se reescribe la frecuencia de muestreo
-/// declarada en el WAV (mismo truco que un "audio ralentizado").
+/// declarada en el WAV (mismo truco que un "audio ralentizado"). Con
+/// <c>ttsEngine=elevenlabs</c> (de pago, requiere API key) se usa una voz
+/// neuronal en la nube, mucho más natural que Piper o SAPI.
 /// Si nada funciona, Claudio sigue vivo y solo escribe la respuesta por consola.
 /// </summary>
 public sealed class Voice : IDisposable
 {
+    static readonly HttpClient ElevenLabsHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
+
     string _engine;
     readonly string? _piperModel;
     readonly string _piperPath;
     readonly double _speedFactor;
+    readonly string? _elevenLabsApiKey;
+    readonly string? _elevenLabsVoiceId;
+    readonly string _elevenLabsModel;
     readonly SpeechSynthesizer? _sapi;
 
     public Voice(ClaudioConfig cfg)
@@ -27,6 +36,10 @@ public sealed class Voice : IDisposable
         _piperModel = cfg.PiperModel;
         _piperPath = string.IsNullOrWhiteSpace(cfg.PiperPath) ? "piper" : cfg.PiperPath;
         _speedFactor = cfg.PiperSpeedFactor;
+        _elevenLabsApiKey = cfg.ElevenLabsApiKey;
+        _elevenLabsVoiceId = cfg.ElevenLabsVoiceId;
+        _elevenLabsModel = cfg.ElevenLabsModel;
+        // "auto" nunca elige ElevenLabs (es de pago): hay que pedirlo explícitamente.
         _engine = cfg.TtsEngine is "auto" or "" ? Detect() : cfg.TtsEngine;
 
         // Aceptamos el nombre antiguo de Linux por compatibilidad con appsettings viejos.
@@ -58,7 +71,7 @@ public sealed class Voice : IDisposable
     }
 
     public string Engine => _engine;
-    public bool Available => _engine is "sapi" or "piper";
+    public bool Available => _engine is "sapi" or "piper" or "elevenlabs";
 
     string Detect() => Which(_piperPath) ? "piper" : "sapi";
 
@@ -102,6 +115,9 @@ public sealed class Voice : IDisposable
                     break;
                 case "piper":
                     await SpeakPiperAsync(text, ct);
+                    break;
+                case "elevenlabs":
+                    await SpeakElevenLabsAsync(text, ct);
                     break;
                 // "none": ya se ha impreso arriba, no hay nada más que hacer.
             }
@@ -182,6 +198,67 @@ public sealed class Voice : IDisposable
             if (deepened is not null) TryDelete(deepened);
         }
     }
+
+    async Task SpeakElevenLabsAsync(string text, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_elevenLabsApiKey))
+        {
+            Console.Error.WriteLine(
+                "[tts] elevenlabs necesita la variable de entorno CLAUDIO_ELEVENLABS_API_KEY (nunca en appsettings.json).");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_elevenLabsVoiceId))
+        {
+            Console.Error.WriteLine("[tts] elevenlabs necesita 'elevenLabsVoiceId' en appsettings.json.");
+            return;
+        }
+
+        using var req = new HttpRequestMessage(
+            HttpMethod.Post, $"https://api.elevenlabs.io/v1/text-to-speech/{_elevenLabsVoiceId}");
+        req.Headers.Add("xi-api-key", _elevenLabsApiKey);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("audio/mpeg"));
+        req.Content = JsonContent.Create(new
+        {
+            text,
+            model_id = _elevenLabsModel,
+            voice_settings = new { stability = 0.5, similarity_boost = 0.75, use_speaker_boost = true },
+        });
+
+        using var resp = await ElevenLabsHttp.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            Console.Error.WriteLine($"[tts] ElevenLabs devolvió {(int)resp.StatusCode}: {Trim(err)}");
+            return;
+        }
+
+        var mp3 = Path.Combine(Path.GetTempPath(), $"claudio-tts-{Guid.NewGuid():N}.mp3");
+        await using (var fs = File.Create(mp3))
+            await resp.Content.CopyToAsync(fs, ct);
+
+        try { await PlayMp3Async(mp3, ct); }
+        finally { TryDelete(mp3); }
+    }
+
+    static async Task PlayMp3Async(string mp3, CancellationToken ct)
+    {
+        using var reader = new Mp3FileReader(mp3);
+        using var output = new WaveOutEvent();
+        output.Init(reader);
+        output.Play();
+
+        while (output.PlaybackState == PlaybackState.Playing)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                output.Stop();
+                break;
+            }
+            await Task.Delay(100, CancellationToken.None);
+        }
+    }
+
+    static string Trim(string s) => s.Length <= 200 ? s : s[..200] + "…";
 
     /// <summary>
     /// Reescribe la frecuencia de muestreo del WAV (sin tocar las muestras) para que

@@ -75,6 +75,22 @@ static class Program
 
         switch (args[0])
         {
+            case "--bench" when args.Length > 1:
+            {
+                var n = args.Length > 2 && int.TryParse(args[2], out var reps) ? reps : 3;
+                using var stt = new SpeechToText(cfg);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                await stt.WarmUpAsync();
+                Console.WriteLine($"carga del modelo: {sw.ElapsedMilliseconds} ms");
+                for (var i = 0; i < n; i++)
+                {
+                    sw.Restart();
+                    var text = await stt.TranscribeAsync(args[1]);
+                    Console.WriteLine($"pasada {i + 1}: {sw.ElapsedMilliseconds} ms  →  {text}");
+                }
+                return 0;
+            }
+
             case "--transcribe" when args.Length > 1:
             {
                 using var stt = new SpeechToText(cfg);
