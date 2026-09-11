@@ -119,7 +119,7 @@ static class Program
 
             case "--say" when args.Length > 1:
             {
-                using var voice = new Voice(cfg.TtsEngine, cfg.PiperModel);
+                using var voice = new Voice(cfg);
                 Console.WriteLine($"motor de voz: {(voice.Available ? voice.Engine : "ninguno")}");
                 await voice.SpeakAsync(args[1]);
                 return 0;

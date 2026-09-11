@@ -34,16 +34,50 @@ key; el resto del código no cambia.
 - **CLI de `claude`** en el PATH y con sesión iniciada (`claude` a secas debe abrir la sesión).
 - Un **micrófono** con permiso concedido en *Configuración → Privacidad y seguridad → Micrófono*
   (activa además "Permitir que las aplicaciones de escritorio accedan al micrófono").
-- **Voz de salida:** se usa SAPI (`System.Speech`), incluido en Windows, sin instalar nada.
-  - Para que hable en español con acento nativo, instala una voz española:
-    *Configuración → Hora e idioma → Idioma y región → añade "Español"* y, en sus
-    opciones de idioma, descarga **Voz**. Claudio la detecta y la usa automáticamente.
-  - Alternativa de más calidad: [Piper](https://github.com/rhasspy/piper) — pon
-    `piper.exe` en el PATH, indica la ruta de un modelo `.onnx` de voz española en
-    `appsettings.json` → `piperModel` y `ttsEngine` a `piper`.
+- **Voz de salida:** por defecto usa [Piper](https://github.com/rhasspy/piper) con una
+  voz masculina grave en español (ver más abajo); si `ttsEngine` es `sapi` o no
+  encuentra Piper, cae a SAPI (`System.Speech`), incluido en Windows sin instalar nada
+  — para que SAPI hable en español con acento nativo, instala una voz en
+  *Configuración → Hora e idioma → Idioma y región → añade "Español"* → **Voz**.
 
 En la primera ejecución se descarga el modelo Whisper (`base`, ~142 MB) a
 `%LOCALAPPDATA%\claudio-ai\models\`.
+
+### Voz grave con Piper (opcional pero recomendado)
+
+Piper es un TTS neuronal offline, bastante mejor que las voces SAPI de Windows.
+Se le puede además bajar el tono y la velocidad para una voz más grave y
+pausada — no es una clonación de ninguna voz de personaje, solo un ajuste
+sobre una voz neutra:
+
+```powershell
+# 1. Piper (Windows x64)
+Invoke-WebRequest -Uri "https://github.com/rhasspy/piper/releases/latest/download/piper_windows_amd64.zip" -OutFile "$env:TEMP\piper.zip"
+Expand-Archive "$env:TEMP\piper.zip" "$env:LOCALAPPDATA\claudio-ai\tools" -Force
+
+# 2. Una voz masculina en español (Piper ofrece varias; davefx y sharvard son las más graves)
+$voice = "$env:LOCALAPPDATA\claudio-ai\models"
+New-Item -ItemType Directory -Force -Path $voice | Out-Null
+Invoke-WebRequest -Uri "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx" -OutFile "$voice\es_ES-davefx-medium.onnx"
+Invoke-WebRequest -Uri "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json" -OutFile "$voice\es_ES-davefx-medium.onnx.json"
+```
+
+En `appsettings.json`:
+
+```json
+"ttsEngine": "piper",
+"piperPath": "C:\\ruta\\a\\claudio-ai\\tools\\piper\\piper.exe",
+"piperModel": "C:\\ruta\\a\\claudio-ai\\models\\es_ES-davefx-medium.onnx",
+"piperSpeedFactor": 0.9
+```
+
+`piperSpeedFactor` (por defecto `1.0`) reescribe la frecuencia de muestreo del
+audio que genera Piper: por debajo de `1.0` la voz suena más grave y pausada
+(prueba entre `0.85` y `0.95`); por encima, más aguda y rápida. Pruébalo con
+`dotnet run -c Release -- --say "texto de prueba"` sin tener que reiniciar
+Claudio, y ajusta el número a tu gusto — no hay una respuesta "correcta", es
+cuestión de oído. Otras voces masculinas de España para probar: `sharvard`,
+`carlfm` (mismo patrón de URL, cambiando el nombre).
 
 ## Uso
 
@@ -155,8 +189,10 @@ como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
 | `language`               | `es`        | idioma de transcripción y respuestas                          |
 | `whisperModel`           | `base`      | `tiny` \| `base` \| `small` \| `medium` — `tiny` responde más rápido |
 | `claudeCommand`          | `claude`    | ejecutable del cerebro                                         |
-| `ttsEngine`              | `auto`      | `auto` \| `sapi` \| `piper` \| `none`                          |
-| `piperModel`             | `null`      | ruta al `.onnx` de Piper                                        |
+| `ttsEngine`              | `piper`     | `auto` \| `sapi` \| `piper` \| `none`                          |
+| `piperModel`             | ver abajo   | ruta al `.onnx` de Piper                                        |
+| `piperPath`              | `piper`     | ruta al ejecutable de Piper (por defecto lo busca en el PATH)   |
+| `piperSpeedFactor`       | `1.0`       | `<1.0` = voz más grave y pausada; `>1.0` = más aguda y rápida   |
 | `wakeWord`               | `Claudio`   | palabra que activa a Claudio                                    |
 | `wakeWordVariants`       | ver abajo   | grafías que Whisper suele usar para "Claudio" y también activan |
 | `chimeOnWake`            | `true`      | sonido del sistema al detectar la activación                    |

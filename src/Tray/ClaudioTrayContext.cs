@@ -73,7 +73,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         _router = new ActionRouter();
         _projects = new ProjectResolver(cfg);
         _github = new GitHubOps(cfg);
-        _voice = new Voice(cfg.TtsEngine, cfg.PiperModel);
+        _voice = new Voice(cfg);
 
         _icons = Enum.GetValues<TrayState>().ToDictionary(s => s, TrayIconFactory.Create);
 

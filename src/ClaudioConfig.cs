@@ -27,6 +27,16 @@ public sealed record ClaudioConfig
     /// <summary>Ruta a un modelo .onnx de Piper (solo si TtsEngine = piper).</summary>
     public string? PiperModel { get; init; }
 
+    /// <summary>Ruta o nombre del ejecutable de Piper (por defecto lo busca como "piper" en el PATH).</summary>
+    public string PiperPath { get; init; } = "piper";
+
+    /// <summary>
+    /// Factor de velocidad/tono para la voz de Piper (1.0 = sin cambios). Por debajo
+    /// de 1 la voz suena más grave y pausada (p. ej. 0.90); por encima, más aguda y
+    /// rápida. No afecta a SAPI.
+    /// </summary>
+    public double PiperSpeedFactor { get; init; } = 1.0;
+
     // ─── Palabra de activación ────────────────────────────────────────────────
 
     /// <summary>Palabra que despierta a Claudio ("Claudio, {orden}").</summary>
@@ -108,6 +118,8 @@ public sealed record ClaudioConfig
             ClaudeCommand          = Env("CLAUDIO_CLAUDE_CMD")       ?? cfg.ClaudeCommand,
             TtsEngine              = Env("CLAUDIO_TTS")              ?? cfg.TtsEngine,
             PiperModel             = Env("CLAUDIO_PIPER_MODEL")      ?? cfg.PiperModel,
+            PiperPath              = Env("CLAUDIO_PIPER_PATH")       ?? cfg.PiperPath,
+            PiperSpeedFactor       = EnvDouble("CLAUDIO_PIPER_SPEED") ?? cfg.PiperSpeedFactor,
             WakeWord               = Env("CLAUDIO_WAKE_WORD")        ?? cfg.WakeWord,
             ChimeOnWake            = EnvBool("CLAUDIO_CHIME")        ?? cfg.ChimeOnWake,
             SilenceMs              = EnvInt("CLAUDIO_SILENCE_MS")    ?? cfg.SilenceMs,

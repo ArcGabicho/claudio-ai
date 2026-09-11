@@ -6,20 +6,28 @@ namespace ClaudioAi.Audio;
 
 /// <summary>
 /// Texto a voz para Windows. Por defecto usa SAPI (<c>System.Speech</c>), que
-/// siempre está disponible; si hay un <c>piper.exe</c> en el PATH y un modelo
-/// <c>.onnx</c> configurado, se puede forzar Piper para una voz de más calidad.
+/// siempre está disponible; si hay un <c>piper.exe</c> en el PATH (o en
+/// <c>piperPath</c>) y un modelo <c>.onnx</c> configurado, se puede forzar Piper
+/// para una voz de más calidad. Con Piper, <see cref="_speedFactor"/> permite
+/// bajar el tono y la velocidad para una voz más grave y pausada, sin depender
+/// de ninguna librería de pitch-shift: se reescribe la frecuencia de muestreo
+/// declarada en el WAV (mismo truco que un "audio ralentizado").
 /// Si nada funciona, Claudio sigue vivo y solo escribe la respuesta por consola.
 /// </summary>
 public sealed class Voice : IDisposable
 {
     string _engine;
     readonly string? _piperModel;
+    readonly string _piperPath;
+    readonly double _speedFactor;
     readonly SpeechSynthesizer? _sapi;
 
-    public Voice(string configured, string? piperModel)
+    public Voice(ClaudioConfig cfg)
     {
-        _piperModel = piperModel;
-        _engine = configured is "auto" or "" ? Detect() : configured;
+        _piperModel = cfg.PiperModel;
+        _piperPath = string.IsNullOrWhiteSpace(cfg.PiperPath) ? "piper" : cfg.PiperPath;
+        _speedFactor = cfg.PiperSpeedFactor;
+        _engine = cfg.TtsEngine is "auto" or "" ? Detect() : cfg.TtsEngine;
 
         // Aceptamos el nombre antiguo de Linux por compatibilidad con appsettings viejos.
         if (_engine is "espeak-ng" or "spd-say")
@@ -52,10 +60,15 @@ public sealed class Voice : IDisposable
     public string Engine => _engine;
     public bool Available => _engine is "sapi" or "piper";
 
-    static string Detect() => Which("piper") ? "piper" : "sapi";
+    string Detect() => Which(_piperPath) ? "piper" : "sapi";
 
     static bool Which(string bin)
     {
+        // Una ruta explícita (con carpeta o extensión) se comprueba directamente;
+        // un nombre suelto se busca en el PATH con "where".
+        if (bin.Contains(Path.DirectorySeparatorChar) || bin.Contains(Path.AltDirectorySeparatorChar))
+            return File.Exists(bin);
+
         try
         {
             using var p = Process.Start(new ProcessStartInfo("where", bin)
@@ -134,7 +147,7 @@ public sealed class Voice : IDisposable
 
         var wav = Path.Combine(Path.GetTempPath(), $"claudio-tts-{Guid.NewGuid():N}.wav");
 
-        var piper = new ProcessStartInfo("piper")
+        var piper = new ProcessStartInfo(_piperPath)
         {
             RedirectStandardInput = true,
             RedirectStandardError = true,
@@ -144,21 +157,48 @@ public sealed class Voice : IDisposable
         piper.ArgumentList.Add("--model"); piper.ArgumentList.Add(_piperModel);
         piper.ArgumentList.Add("--output_file"); piper.ArgumentList.Add(wav);
 
-        using (var p = Process.Start(piper)!)
+        using (var p = Process.Start(piper)
+            ?? throw new InvalidOperationException($"no pude lanzar '{_piperPath}'"))
         {
             await p.StandardInput.WriteAsync(text.AsMemory(), ct);
             p.StandardInput.Close();
             await p.WaitForExitAsync(ct);
         }
 
+        string? deepened = null;
         try
         {
-            await PlayWavAsync(wav, ct);
+            var toPlay = wav;
+            if (_speedFactor is < 0.999 or > 1.001)
+            {
+                deepened = MakeDeeper(wav, _speedFactor);
+                toPlay = deepened;
+            }
+            await PlayWavAsync(toPlay, ct);
         }
         finally
         {
-            try { File.Delete(wav); } catch { /* da igual */ }
+            TryDelete(wav);
+            if (deepened is not null) TryDelete(deepened);
         }
+    }
+
+    /// <summary>
+    /// Reescribe la frecuencia de muestreo del WAV (sin tocar las muestras) para que
+    /// suene más grave y pausada cuanto más bajo sea <paramref name="speedFactor"/>
+    /// (p. ej. 0.90 ≈ un tono más grave y un 10 % más lenta). Es el mismo truco que
+    /// un "audio ralentizado": no requiere ninguna librería de pitch-shift.
+    /// </summary>
+    static string MakeDeeper(string wavPath, double speedFactor)
+    {
+        using var reader = new WaveFileReader(wavPath);
+        var original = reader.WaveFormat;
+        var deeper = new WaveFormat((int)(original.SampleRate * speedFactor), original.BitsPerSample, original.Channels);
+
+        var outPath = Path.Combine(Path.GetTempPath(), $"claudio-tts-deep-{Guid.NewGuid():N}.wav");
+        using (var writer = new WaveFileWriter(outPath, deeper))
+            reader.CopyTo(writer);
+        return outPath;
     }
 
     static async Task PlayWavAsync(string wav, CancellationToken ct)
@@ -177,6 +217,11 @@ public sealed class Voice : IDisposable
             }
             await Task.Delay(100, CancellationToken.None);
         }
+    }
+
+    static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { /* da igual */ }
     }
 
     public void Dispose() => _sapi?.Dispose();
