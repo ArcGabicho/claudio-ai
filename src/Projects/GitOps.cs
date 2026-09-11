@@ -4,27 +4,19 @@ using ClaudioAi.Diagnostics;
 
 namespace ClaudioAi.Projects;
 
-/// <summary>Resultado de una operación de git/GitHub, con el texto para decir en voz alta.</summary>
+/// <summary>Resultado de una operación de git, con el texto para decir en voz alta.</summary>
 public sealed record GitResult(bool Ok, string Message, string? Path = null);
 
 /// <summary>
-/// Crea proyectos locales, clona repositorios y publica un proyecto existente en
-/// GitHub (creando el repositorio con <c>gh</c> si hace falta). Solo opera sobre la
-/// carpeta de Windows configurada: no toca WSL ni nada fuera de esa carpeta.
+/// Crea proyectos locales y clona repositorios de GitHub, usando solo <c>git</c>
+/// (sin el CLI de GitHub). Solo opera sobre la carpeta de Windows configurada: no
+/// toca WSL ni nada fuera de esa carpeta.
 /// </summary>
-public sealed class GitHubOps
+public sealed class GitOps
 {
     readonly ClaudioConfig _cfg;
-    bool? _ghAvailable;
-    bool? _ghAuthed;
 
-    public GitHubOps(ClaudioConfig cfg) => _cfg = cfg;
-
-    public bool IsGhAvailable() => _ghAvailable ??= RunGh(["--version"], null, 5000).ok;
-
-    public bool IsGhAuthenticated() => _ghAuthed ??= RunGh(["auth", "status"], null, 8000).ok;
-
-    public bool HasRemote(string path) => RunGit(["remote", "get-url", "origin"], path, 8000).ok;
+    public GitOps(ClaudioConfig cfg) => _cfg = cfg;
 
     public GitResult CreateProject(string spokenName)
     {
@@ -80,65 +72,11 @@ public sealed class GitHubOps
             : new GitResult(false, $"No pude clonar {owner} barra {repo}: {Trim(output)}");
     }
 
-    /// <summary>Crea el commit inicial si hace falta y publica: push si ya hay remoto, o crea el repo con gh si no.</summary>
-    public GitResult Publish(string path, string projectName, bool isPrivate)
+    static (bool ok, string output) RunGit(IEnumerable<string> args, string? workingDir, int timeoutMs)
     {
         try
         {
-            if (!Directory.Exists(System.IO.Path.Combine(path, ".git")))
-            {
-                var init = RunGit(["init"], path, 10000);
-                if (!init.ok) return new GitResult(false, $"«git init» falló: {Trim(init.output)}");
-            }
-
-            var status = RunGit(["status", "--porcelain"], path, 10000);
-            if (status.ok && !string.IsNullOrWhiteSpace(status.output))
-            {
-                RunGit(["add", "-A"], path, 15000);
-                var commit = RunGit(["commit", "-m", "Commit inicial"], path, 15000);
-                if (!commit.ok) return new GitResult(false, $"No pude preparar los cambios para subir: {Trim(commit.output)}");
-            }
-
-            if (HasRemote(path))
-            {
-                var (ok, output) = RunGit(["push"], path, 60000);
-                return ok
-                    ? new GitResult(true, $"Subí los cambios de {projectName} a GitHub.")
-                    : new GitResult(false, $"No pude subir los cambios: {Trim(output)}");
-            }
-
-            if (!IsGhAvailable())
-                return new GitResult(false,
-                    "No tengo el CLI de GitHub instalado. Instálalo con winget install GitHub punto cli, y vuelve a pedírmelo.");
-            if (!IsGhAuthenticated())
-                return new GitResult(false,
-                    "El CLI de GitHub no tiene sesión iniciada. Ejecuta gh auth login en una terminal, y vuelve a pedírmelo.");
-
-            var slug = Slug(projectName);
-            var create = RunGh(
-                ["repo", "create", slug, isPrivate ? "--private" : "--public",
-                 "--source", path, "--remote", "origin", "--push"],
-                null, 60000);
-
-            return create.ok
-                ? new GitResult(true, $"Creé el repositorio {slug} en tu GitHub como {(isPrivate ? "privado" : "público")} y subí el proyecto.")
-                : new GitResult(false, $"No pude crear el repositorio: {Trim(create.output)}");
-        }
-        catch (Exception ex)
-        {
-            Log.Error("Error al publicar el proyecto", ex);
-            return new GitResult(false, "Ha habido un error al publicar el proyecto.");
-        }
-    }
-
-    (bool ok, string output) RunGit(IEnumerable<string> args, string? workingDir, int timeoutMs) => Run("git", args, workingDir, timeoutMs);
-    (bool ok, string output) RunGh(IEnumerable<string> args, string? workingDir, int timeoutMs) => Run("gh", args, workingDir, timeoutMs);
-
-    static (bool ok, string output) Run(string exe, IEnumerable<string> args, string? workingDir, int timeoutMs)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo(exe)
+            var psi = new ProcessStartInfo("git")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -164,11 +102,11 @@ public sealed class GitHubOps
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            return (false, $"{exe} no está instalado o no está en el PATH");   // caso esperado, sin ensuciar el log
+            return (false, "git no está instalado o no está en el PATH");   // caso esperado, sin ensuciar el log
         }
         catch (Exception ex)
         {
-            Log.Error($"No pude ejecutar {exe}", ex);
+            Log.Error("No pude ejecutar git", ex);
             return (false, ex.Message);
         }
     }

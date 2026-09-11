@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 namespace ClaudioAi.Brain;
@@ -22,16 +23,23 @@ public sealed class ClaudeBrain
         Eres "Claudio", un asistente de voz para un PC con Windows 11.
         El usuario habla y su voz se transcribe, así que puede haber errores de transcripción; interpreta con sentido común.
         Responde EXCLUSIVAMENTE con un objeto JSON en UNA sola línea, sin markdown ni texto alrededor:
-        {"action":"open_app|web_search|shell|open_project|new_project|clone_repo|publish_repo|say","target":"...","say":"..."}
+        {"action":"open_app|web_search|web_answer|shell|open_project|new_project|clone_repo|say","target":"...","say":"..."}
         - open_app: para lanzar un PROGRAMA suelto. target = ejecutable o nombre de app de Windows (firefox, chrome, msedge, code, notepad, calc, explorer, spotify, ...). Deduce el nombre del ejecutable de lo que diga el usuario.
-        - web_search: target = términos de búsqueda; se abrirán en el navegador.
+        - web_search: para ABRIR una búsqueda en el navegador cuando el usuario quiere navegar él mismo ("busca vuelos a Cusco", "ábreme una búsqueda de..."). target = términos de búsqueda.
+        - web_answer: para RESPONDER HABLANDO con información de internet, cuando el usuario pregunta algo y quiere que TÚ le contestes (no que se abra el navegador): "qué es X", "quién es X", "cuánto cuesta X", "qué pasó con X", noticias, precios, resultados, o cualquier cosa que cambie con el tiempo o que no sepas con certeza. target = la pregunta o lo que hay que buscar, tal y como la entendiste. "say":"", Claudio busca y responde por su cuenta.
         - shell: target = UN solo comando de consulta de PowerShell NO destructivo, sin tuberías. Ejemplos válidos: "Get-Date" (fecha/hora), "(Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime" (tiempo encendido), "Get-CimInstance Win32_OperatingSystem" (memoria/sistema), "Get-Volume" (discos), "whoami", "hostname", "systeminfo". Nunca borres, muevas ni modifiques nada; prohibido usar ';', '|', '>', '&', '$(' o varios comandos.
         - open_project: para abrir un PROYECTO, repositorio o carpeta de código (Windows o WSL) YA EXISTENTE, no un programa suelto. target = "[herramienta:]nombre del proyecto" TAL Y COMO LO DIJO el usuario, sin inventar rutas (se compara luego contra los proyectos reales que existen de verdad). "herramienta" es opcional: pon "vscode:" si menciona Visual Studio Code / VS Code / el editor / el código; pon "claude:" si menciona Claude Code / la terminal de Claude; pon "both:" si pide los dos. Si NO menciona ninguna herramienta, deja el target SIN prefijo (solo el nombre) y Claudio preguntará cuál usar. Dos ejemplos: dice "ábreme claudio-ai con Visual Studio Code" → target="vscode:claudio-ai"; dice "abre el proyecto vitalis erp" → target="vitalis erp". Pon "say":"" en esta acción, Claudio genera su propia respuesta.
         - new_project: crea una carpeta de proyecto NUEVA (de momento solo en Windows) con git ya iniciado, para EMPEZAR algo desde cero ("créame un proyecto llamado X", "empieza un proyecto nuevo X"). target = nombre del proyecto tal y como lo dijo el usuario, sin inventarle nada. "say":"".
         - clone_repo: clona un repositorio YA EXISTENTE de GitHub a la carpeta de proyectos de Windows ("clona X", "clona el repo X de fulano", "clona mi repo X"). target = referencia del repositorio, intenta darla en formato "usuario/repo" si puedes deducir el usuario de lo que dijo; si dice "mi repo" o no menciona de quién es, deja solo el nombre del repo (sin usuario) y Claudio usará el usuario configurado; si dice una URL completa de github.com, pon esa URL. "say":"".
-        - publish_repo: sube a GitHub un proyecto YA EXISTENTE en disco, creando el repositorio remoto si hace falta ("sube X a GitHub", "publica X", "crea un repositorio para X"). target = "[public:|private:]nombre del proyecto" tal y como lo dijo; pon el prefijo "public:" o "private:" SOLO si el usuario dijo explícitamente "público"/"privado" en la misma frase, si no, deja el target sin prefijo y Claudio preguntará. "say":"".
-        - say: solo hablar (conversación, preguntas, o cuando no haya una acción clara).
+        - say: solo hablar (conversación, preguntas de cultura general que ya sabes con certeza, o cuando no haya una acción clara).
         El campo "say" va siempre en español, natural y breve (máximo ~20 palabras).
+        """;
+
+    const string WebAnswerPreamble = """
+        Eres "Claudio", un asistente de voz. Busca en internet información fiable y
+        actual sobre esto, y responde en español EXCLUSIVAMENTE con la respuesta hablada,
+        breve (máximo ~60 palabras), sin markdown, sin listas, sin enlaces ni citas: como
+        si se la dijeras en voz alta a alguien.
         """;
 
     public async Task<AssistantAction> DecideAsync(string transcript, CancellationToken ct = default)
@@ -50,12 +58,30 @@ public sealed class ClaudeBrain
             : new AssistantAction { Action = "say", Say = "No he podido contactar con el modelo." };
     }
 
-    async Task<(bool ok, string output)> RunClaudeAsync(string prompt, bool resume, CancellationToken ct)
+    /// <summary>
+    /// Pregunta algo que requiere información de internet: lanza una sesión de Claude
+    /// aparte (no comparte memoria con <see cref="DecideAsync"/>) con las herramientas
+    /// de búsqueda web permitidas sin pedir confirmación, y devuelve la respuesta ya
+    /// pensada para decirse en voz alta.
+    /// </summary>
+    public async Task<string> AnswerFromWebAsync(string question, CancellationToken ct = default)
+    {
+        var prompt = $"{WebAnswerPreamble}\n\nPregunta: \"{question}\"";
+        var (ok, raw) = await RunClaudeAsync(prompt, resume: false, ct, extraArgs: ["--allowedTools", "WebSearch", "WebFetch"]);
+        return ok && !string.IsNullOrWhiteSpace(raw)
+            ? Collapse(raw)
+            : "No he podido buscarlo en internet ahora mismo.";
+    }
+
+    async Task<(bool ok, string output)> RunClaudeAsync(
+        string prompt, bool resume, CancellationToken ct, IReadOnlyList<string>? extraArgs = null)
     {
         var psi = new ProcessStartInfo(_cfg.ClaudeCommand)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -63,6 +89,8 @@ public sealed class ClaudeBrain
         psi.ArgumentList.Add(prompt);
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("json");
+        if (extraArgs is not null)
+            foreach (var arg in extraArgs) psi.ArgumentList.Add(arg);
         if (resume && _sessionId is not null)
         {
             psi.ArgumentList.Add("--resume");

@@ -32,7 +32,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
     readonly ClaudeBrain _brain;
     readonly ActionRouter _router;
     readonly ProjectResolver _projects;
-    readonly GitHubOps _github;
+    readonly GitOps _git;
     readonly Voice _voice;
 
     readonly CancellationTokenSource _cts = new();
@@ -41,19 +41,13 @@ public sealed class ClaudioTrayContext : ApplicationContext
     volatile bool _disposed;
     volatile bool _awaitingCommand;
     DateTime _awaitDeadline;
-    PendingClarification? _pending;
+    PendingOpenProject? _pending;
 
-    enum PendingAction { OpenProject, PublishRepo }
-    enum ClarifyKind { Tool, Visibility, Confirm, ProjectChoice }
+    enum ClarifyKind { Tool, ProjectChoice }
 
-    sealed record PendingClarification(
-        PendingAction Action,
-        ClarifyKind Kind,
-        IReadOnlyList<ProjectRef> Candidates,
-        string? Tool,
-        bool? IsPrivate,
-        DateTime Deadline,
-        int Attempt = 0);
+    /// <summary>Aclaración pendiente de "Claudio, abre X" cuando falta la herramienta o el nombre es ambiguo.</summary>
+    sealed record PendingOpenProject(
+        ClarifyKind Kind, IReadOnlyList<ProjectRef> Candidates, string? Tool, DateTime Deadline, int Attempt = 0);
 
     public ClaudioTrayContext(ClaudioConfig cfg)
     {
@@ -72,7 +66,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         _brain = new ClaudeBrain(cfg);
         _router = new ActionRouter();
         _projects = new ProjectResolver(cfg);
-        _github = new GitHubOps(cfg);
+        _git = new GitOps(cfg);
         _voice = new Voice(cfg);
 
         _icons = Enum.GetValues<TrayState>().ToDictionary(s => s, TrayIconFactory.Create);
@@ -144,7 +138,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
     {
         try
         {
-            // ¿Es la respuesta a una aclaración pendiente ("¿con qué lo abro?", "¿confirmas?"...)?
+            // ¿Es la respuesta a "¿con qué lo abro?" / "¿cuál de todos?"?
             if (_pending is { } pending && DateTime.UtcNow <= pending.Deadline)
             {
                 _pending = null;
@@ -232,7 +226,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
                         await _voice.SpeakAsync("¿Cómo quieres llamar al proyecto?", _cts.Token);
                         return;
                     }
-                    var created = await Task.Run(() => _github.CreateProject(name));
+                    var created = await Task.Run(() => _git.CreateProject(name));
                     Log.Info($"new_project «{name}» → {(created.Ok ? "ok" : "error")}: {created.Message}");
                     await _voice.SpeakAsync(created.Message, _cts.Token);
                     return;
@@ -247,19 +241,19 @@ public sealed class ClaudioTrayContext : ApplicationContext
                         return;
                     }
                     SetState(TrayState.Busy, "Claudio — clonando…");
-                    var cloned = await Task.Run(() => _github.Clone(reference));
+                    var cloned = await Task.Run(() => _git.Clone(reference));
                     Log.Info($"clone_repo «{reference}» → {(cloned.Ok ? "ok" : "error")}: {cloned.Message}");
                     await _voice.SpeakAsync(cloned.Message, _cts.Token);
                     return;
                 }
 
-                case "publish_repo":
+                case "web_answer":
                 {
-                    var (isPrivate, spoken) = ParseVisibilityTarget(action.Target);
-                    if (string.IsNullOrWhiteSpace(spoken))
-                        await _voice.SpeakAsync("¿Qué proyecto quieres subir?", _cts.Token);
-                    else
-                        await ResolvePublishAsync(_projects.Match(spoken), isPrivate, spoken);
+                    var question = string.IsNullOrWhiteSpace(action.Target) ? command : action.Target;
+                    SetState(TrayState.Busy, "Claudio — buscando en internet…");
+                    var answer = await _brain.AnswerFromWebAsync(question, _cts.Token);
+                    Log.Info($"web_answer «{question}» → {answer}");
+                    await _voice.SpeakAsync(answer, _cts.Token);
                     return;
                 }
             }
@@ -300,7 +294,8 @@ public sealed class ClaudioTrayContext : ApplicationContext
 
         if (matches.Count > 1)
         {
-            AskProjectChoice(PendingAction.OpenProject, matches, tool, null);
+            _pending = new PendingOpenProject(ClarifyKind.ProjectChoice, matches, tool, DateTime.UtcNow.AddSeconds(12));
+            SetState(TrayState.Listening, "Claudio — ¿cuál de todos?");
             await _voice.SpeakAsync($"Encontré varios: {DescribeOptions(matches)}. ¿Cuál quieres?", _cts.Token);
             return;
         }
@@ -316,58 +311,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         await _voice.SpeakAsync(await Task.Run(() => _projects.Open(project, tool)), _cts.Token);
     }
 
-    // ─── publish_repo: resolver candidatos → preguntar visibilidad → confirmar ───────
-
-    async Task ResolvePublishAsync(IReadOnlyList<ProjectRef> matches, bool? isPrivate, string spokenForError)
-    {
-        if (matches.Count == 0)
-        {
-            await _voice.SpeakAsync($"No encontré ningún proyecto llamado «{spokenForError}».", _cts.Token);
-            return;
-        }
-
-        if (matches.Count > 1)
-        {
-            AskProjectChoice(PendingAction.PublishRepo, matches, null, isPrivate);
-            await _voice.SpeakAsync($"Encontré varios: {DescribeOptions(matches)}. ¿Cuál quieres?", _cts.Token);
-            return;
-        }
-
-        await ContinuePublishAsync(matches[0], isPrivate);
-    }
-
-    async Task ContinuePublishAsync(ProjectRef project, bool? isPrivate)
-    {
-        if (project.Kind == ProjectKind.Wsl)
-        {
-            await _voice.SpeakAsync("De momento solo puedo publicar en GitHub proyectos de Windows.", _cts.Token);
-            return;
-        }
-
-        var hasRemote = await Task.Run(() => _github.HasRemote(project.Path));
-
-        if (!hasRemote && isPrivate is null)
-        {
-            _pending = new PendingClarification(
-                PendingAction.PublishRepo, ClarifyKind.Visibility, [project], null, null, DateTime.UtcNow.AddSeconds(12));
-            SetState(TrayState.Listening, "Claudio — ¿público o privado?");
-            await _voice.SpeakAsync($"¿{project.Name} lo hago público o privado?", _cts.Token);
-            return;
-        }
-
-        var question = hasRemote
-            ? $"¿Confirmo que subo los cambios de {project.Name} a GitHub?"
-            : $"¿Confirmo que creo el repositorio en tu GitHub como {(isPrivate == true ? "privado" : "público")} y subo {project.Name}?";
-
-        _pending = new PendingClarification(
-            PendingAction.PublishRepo, ClarifyKind.Confirm, [project], null, isPrivate, DateTime.UtcNow.AddSeconds(15));
-        SetState(TrayState.Listening, "Claudio — ¿confirmas?");
-        await _voice.SpeakAsync($"{question} Di sí para continuar.", _cts.Token);
-    }
-
-    // ─── Continuación de cualquier aclaración pendiente ──────────────────────────────
-
-    async Task HandlePendingReplyAsync(PendingClarification pending, string text)
+    async Task HandlePendingReplyAsync(PendingOpenProject pending, string text)
     {
         if (!await _turnLock.WaitAsync(0)) return;
 
@@ -388,15 +332,8 @@ public sealed class ClaudioTrayContext : ApplicationContext
                     }
                     Log.Info($"Proyecto elegido: {chosen.Name} ({chosen.Kind})");
 
-                    if (pending.Action == PendingAction.OpenProject)
-                    {
-                        if (pending.Tool is null) { AskTool(chosen); await _voice.SpeakAsync(AskToolQuestion(chosen), _cts.Token); }
-                        else await _voice.SpeakAsync(await Task.Run(() => _projects.Open(chosen, pending.Tool)), _cts.Token);
-                    }
-                    else
-                    {
-                        await ContinuePublishAsync(chosen, pending.IsPrivate);
-                    }
+                    if (pending.Tool is null) { AskTool(chosen); await _voice.SpeakAsync(AskToolQuestion(chosen), _cts.Token); }
+                    else await _voice.SpeakAsync(await Task.Run(() => _projects.Open(chosen, pending.Tool)), _cts.Token);
                     return;
                 }
 
@@ -410,39 +347,6 @@ public sealed class ClaudioTrayContext : ApplicationContext
                     }
                     Log.Info($"Herramienta elegida: {tool} para {pending.Candidates[0].Name}");
                     await _voice.SpeakAsync(await Task.Run(() => _projects.Open(pending.Candidates[0], tool)), _cts.Token);
-                    return;
-                }
-
-                case ClarifyKind.Visibility:
-                {
-                    var isPrivate = ParseVisibilityKeyword(text);
-                    if (isPrivate is null)
-                    {
-                        await RetryOrGiveUpAsync(pending, "¿Público o privado?");
-                        return;
-                    }
-                    await ContinuePublishAsync(pending.Candidates[0], isPrivate);
-                    return;
-                }
-
-                case ClarifyKind.Confirm:
-                {
-                    var yes = ParseYesNo(text);
-                    if (yes is null)
-                    {
-                        await RetryOrGiveUpAsync(pending, "¿Lo confirmas? Di sí o no.");
-                        return;
-                    }
-                    if (yes == false)
-                    {
-                        await _voice.SpeakAsync("Vale, no hago nada.", _cts.Token);
-                        return;
-                    }
-                    var project = pending.Candidates[0];
-                    Log.Info($"Confirmado: publicar {project.Name} (privado={pending.IsPrivate})");
-                    var result = await Task.Run(() => _github.Publish(project.Path, project.Name, pending.IsPrivate ?? true));
-                    Log.Info($"publish_repo «{project.Name}» → {(result.Ok ? "ok" : "error")}: {result.Message}");
-                    await _voice.SpeakAsync(result.Message, _cts.Token);
                     return;
                 }
             }
@@ -463,7 +367,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         }
     }
 
-    async Task RetryOrGiveUpAsync(PendingClarification pending, string question)
+    async Task RetryOrGiveUpAsync(PendingOpenProject pending, string question)
     {
         if (pending.Attempt >= 1)
         {
@@ -475,15 +379,9 @@ public sealed class ClaudioTrayContext : ApplicationContext
         await _voice.SpeakAsync($"No te he entendido. {question}", _cts.Token);
     }
 
-    void AskProjectChoice(PendingAction action, IReadOnlyList<ProjectRef> candidates, string? tool, bool? isPrivate)
-    {
-        _pending = new PendingClarification(action, ClarifyKind.ProjectChoice, candidates, tool, isPrivate, DateTime.UtcNow.AddSeconds(12));
-        SetState(TrayState.Listening, "Claudio — ¿cuál de todos?");
-    }
-
     void AskTool(ProjectRef project)
     {
-        _pending = new PendingClarification(PendingAction.OpenProject, ClarifyKind.Tool, [project], null, null, DateTime.UtcNow.AddSeconds(12));
+        _pending = new PendingOpenProject(ClarifyKind.Tool, [project], null, DateTime.UtcNow.AddSeconds(12));
         SetState(TrayState.Listening, "Claudio — ¿con qué lo abro?");
     }
 
@@ -511,20 +409,6 @@ public sealed class ClaudioTrayContext : ApplicationContext
         return (null, target.Trim());
     }
 
-    /// <summary>Separa el prefijo "public:"/"private:" que puede venir en target.</summary>
-    static (bool? isPrivate, string name) ParseVisibilityTarget(string? target)
-    {
-        target ??= "";
-        var idx = target.IndexOf(':');
-        if (idx > 0)
-        {
-            var t = target[..idx].Trim().ToLowerInvariant();
-            if (t == "public") return (false, target[(idx + 1)..].Trim());
-            if (t == "private") return (true, target[(idx + 1)..].Trim());
-        }
-        return (null, target.Trim());
-    }
-
     static string? ParseToolKeyword(string text)
     {
         var n = ProjectResolver.Normalize(text);
@@ -535,24 +419,6 @@ public sealed class ClaudioTrayContext : ApplicationContext
         if (Has("los dos") || Has("ambos") || Has("las dos") || (wantsCode && wantsClaude)) return "both";
         if (wantsCode) return "vscode";
         if (wantsClaude) return "claude";
-        return null;
-    }
-
-    static bool? ParseVisibilityKeyword(string text)
-    {
-        var words = ProjectResolver.Normalize(text).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var priv = words.Any(w => w is "privado" or "private" or "privada");
-        var pub = words.Any(w => w is "publico" or "public" or "publica");
-        if (priv && !pub) return true;
-        if (pub && !priv) return false;
-        return null;
-    }
-
-    static bool? ParseYesNo(string text)
-    {
-        var words = ProjectResolver.Normalize(text).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Any(w => w is "si" or "dale" or "adelante" or "confirmo" or "hazlo" or "vale" or "correcto")) return true;
-        if (words.Any(w => w is "no" or "cancela" or "para" or "nada")) return false;
         return null;
     }
 

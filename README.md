@@ -13,7 +13,7 @@ escucha continua  (NAudio + VAD por energía, trocea en frases)
       → transcribir cada frase   (Whisper.net, 100 % local)
       → ¿empieza por "Claudio"?  si no, se ignora
       → decidir                 (CLI de Claude Code → JSON {action,target,say})
-      → ejecutar                 (ActionRouter: open_app | web_search | shell)
+      → ejecutar                 (ActionRouter: open_app | web_search | web_answer | shell | ...)
       → hablar                   (SAPI / System.Speech; opcional: Piper)
 ```
 
@@ -111,39 +111,37 @@ compruebas a qué proyecto resolvería una frase concreta.
   **dentro** de esa distro; si no está, Claudio te avisa por voz en vez de abrir
   una terminal con un error.
 
-### Crear, clonar y publicar en GitHub por voz
+### Crear y clonar proyectos por voz
 
-Requiere el **CLI de GitHub** (`gh`) instalado y autenticado, solo para *crear*
-repositorios (clonar y crear proyectos locales no lo necesitan):
-
-```powershell
-winget install GitHub.cli
-gh auth login
-```
-
-Comprueba el estado con `dotnet run -c Release -- --gh-status`.
+Usa solo `git` (nada de CLI de GitHub ni cuentas que autenticar):
 
 - **"Claudio, crea un proyecto llamado tienda online"** — crea la carpeta en
   `OneDrive\Documents\Proyectos\tienda-online` con `git init` y un primer
-  commit. Solo local, no toca tu GitHub.
+  commit. Solo local.
 - **"Claudio, clona claudio-ai de ArcGabicho"** / **"clona mi repo X"** — clona
-  ese repositorio a tu carpeta de Proyectos. Si no dices de quién es, usa el
-  usuario configurado en `gitHubUsername`.
-- **"Claudio, sube tienda online a GitHub"** / **"publica tienda online como
-  privado"** — para un proyecto que **ya existe en disco**: si ya tiene un
-  repositorio remoto, solo hace `push`; si no, lo crea con `gh` y sube el
-  código. **Antes de tocar tu GitHub, Claudio siempre repite en voz alta lo
-  que va a hacer y pide un «sí» explícito** — esto no se puede desactivar. Si
-  no dijiste si es público o privado, primero te lo pregunta.
+  ese repositorio (debe ser público, o uno privado tuyo si ya tienes sesión de
+  git guardada en el equipo) a tu carpeta de Proyectos. Si no dices de quién
+  es, usa el usuario configurado en `gitHubUsername`.
 
-De momento estas tres acciones solo operan sobre proyectos de **Windows**
+De momento estas dos acciones solo operan sobre proyectos de **Windows**
 (no WSL). Puedes probarlas sin usar la voz:
 
 ```powershell
 dotnet run -c Release -- --new-project "mi proyecto"
 dotnet run -c Release -- --clone-repo "ArcGabicho/claudio-ai"
-dotnet run -c Release -- --publish-repo "mi proyecto" private
 ```
+
+### Preguntarle algo y que busque en internet
+
+**"Claudio, qué es el efecto Mandela"**, **"Claudio, cuánto cuesta ahora mismo
+el dólar en soles"**, **"Claudio, qué pasó hoy con..."** — para preguntas que
+cambian con el tiempo o que Claudio no sabe con certeza, busca en internet con
+las herramientas del propio Claude Code (`WebSearch`/`WebFetch`, permitidas
+sin pedir confirmación solo para esta consulta) y te contesta hablando, breve
+y sin abrir el navegador. Si en cambio quieres navegar tú mismo, pídele que
+"busque X" o "abra una búsqueda de X" y te abre la pestaña en el navegador.
+
+Pruébalo sin voz con `dotnet run -c Release -- --web "tu pregunta"`.
 
 Menú del icono (clic derecho):
 
@@ -174,8 +172,7 @@ dotnet run -c Release -- --projects                            # lista los proye
 dotnet run -c Release -- --match "claudio ai"                  # a qué proyecto(s) resolvería ese nombre
 dotnet run -c Release -- --new-project "mi proyecto"           # crea carpeta + git init + primer commit
 dotnet run -c Release -- --clone-repo "ArcGabicho/claudio-ai"  # clona un repositorio a Proyectos
-dotnet run -c Release -- --publish-repo "mi proyecto" private  # crea el repo en GitHub (o push si ya existe)
-dotnet run -c Release -- --gh-status                           # si el CLI de GitHub está instalado y autenticado
+dotnet run -c Release -- --web "tu pregunta"                   # busca en internet y responde en texto
 ```
 
 `--hear` es el más útil para ajustar el micrófono: si transcribe ruido de fondo
@@ -236,7 +233,7 @@ src/
   Tray/SystemChime.cs            avisos sonoros del sistema
   Projects/ProjectResolver.cs    busca proyectos reales (Windows + WSL), empareja el nombre dicho y los abre
   Projects/ProjectRef.cs         nombre/tipo/ruta de un proyecto encontrado
-  Projects/GitHubOps.cs          crea/clona proyectos y publica en GitHub (git + gh)
+  Projects/GitOps.cs             crea proyectos locales y clona repositorios (solo git, sin gh)
 ```
 
 ### Acción `shell`
@@ -254,5 +251,6 @@ debe estar en una lista blanca (`Get-Date`, `Get-CimInstance`, `Get-Volume`,
 3. **Más acciones**: control de ventanas, multimedia (SMTC), volumen/brillo, Telegram, correo, recordatorios.
 4. ~~Servicio en segundo plano que arranque con la sesión~~ — hecho (bandeja + `HKCU\...\Run`).
 5. Detector de activación dedicado (Porcupine) si la carga de Whisper en continuo pesa demasiado.
-6. TTS de calidad con Piper y voz española fija.
-7. ~~Crear/clonar/publicar proyectos en GitHub por voz~~ — hecho para Windows; falta soporte para WSL.
+6. ~~TTS de calidad con Piper~~ — hecho, con voz masculina grave por defecto.
+7. ~~Crear/clonar proyectos por voz~~ — hecho para Windows, solo con `git` (sin GitHub CLI); falta soporte para WSL.
+8. ~~Responder preguntas buscando en internet~~ — hecho (`web_answer`, vía las herramientas de Claude Code).

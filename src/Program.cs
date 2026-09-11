@@ -152,33 +152,22 @@ static class Program
 
             case "--new-project" when args.Length > 1:
             {
-                var result = new GitHubOps(cfg).CreateProject(args[1]);
+                var result = new GitOps(cfg).CreateProject(args[1]);
                 Console.WriteLine($"{(result.Ok ? "ok" : "error")}: {result.Message}" + (result.Path is null ? "" : $" ({result.Path})"));
                 return result.Ok ? 0 : 1;
             }
 
             case "--clone-repo" when args.Length > 1:
             {
-                var result = new GitHubOps(cfg).Clone(args[1]);
+                var result = new GitOps(cfg).Clone(args[1]);
                 Console.WriteLine($"{(result.Ok ? "ok" : "error")}: {result.Message}" + (result.Path is null ? "" : $" ({result.Path})"));
                 return result.Ok ? 0 : 1;
             }
 
-            case "--publish-repo" when args.Length > 1:
+            case "--web" when args.Length > 1:
             {
-                var resolved = new ProjectResolver(cfg).Match(args[1]);
-                if (resolved.Count != 1) { Console.WriteLine($"({resolved.Count} coincidencias, no ambiguo para esta prueba)"); return 1; }
-                var isPrivate = args.Length <= 2 || !string.Equals(args[2], "public", StringComparison.OrdinalIgnoreCase);
-                var result = new GitHubOps(cfg).Publish(resolved[0].Path, resolved[0].Name, isPrivate);
-                Console.WriteLine($"{(result.Ok ? "ok" : "error")}: {result.Message}");
-                return result.Ok ? 0 : 1;
-            }
-
-            case "--gh-status":
-            {
-                var gh = new GitHubOps(cfg);
-                Console.WriteLine($"gh instalado: {gh.IsGhAvailable()}");
-                Console.WriteLine($"gh autenticado: {gh.IsGhAuthenticated()}");
+                var brain = new ClaudeBrain(cfg);
+                Console.WriteLine(await brain.AnswerFromWebAsync(args[1]));
                 return 0;
             }
 
@@ -199,7 +188,7 @@ static class Program
                 Console.WriteLine(
                     "Uso: claudio [--transcribe <wav> | --record [seg] | --listen | --hear [seg] | " +
                     "--say <texto> | --do <json> | --projects | --match <texto> | --new-project <nombre> | " +
-                    "--clone-repo <owner/repo> | --publish-repo <nombre> [public] | --gh-status | --recognizers]");
+                    "--clone-repo <owner/repo> | --web <pregunta> | --recognizers]");
                 return 1;
         }
     }
