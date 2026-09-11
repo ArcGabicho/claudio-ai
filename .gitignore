@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+
+# Modelos y datos locales
+models/
+*.bin
+*.onnx
