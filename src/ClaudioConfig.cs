@@ -104,6 +104,15 @@ public sealed record ClaudioConfig
     /// <summary>Notas máximas que guarda la memoria persistente antes de olvidar las más antiguas.</summary>
     public int MaxMemoryEntries { get; init; } = 200;
 
+    /// <summary>
+    /// URL del webhook de Discord para las notificaciones del orquestador (tareas
+    /// iniciadas/completadas/fallidas, progreso y alertas del sistema). NUNCA la pongas
+    /// en appsettings.json: se lee exclusivamente de la variable de entorno
+    /// CLAUDIO_DISCORD_WEBHOOK_URL para no dejarla en un fichero que se pueda subir a
+    /// git. Si no se configura, las notificaciones de Discord simplemente se omiten.
+    /// </summary>
+    public string? DiscordWebhookUrl { get; init; }
+
     /// <summary>~/.local/share/claudio-ai — datos persistentes (modelos descargados, log, etc.).</summary>
     public static string DataDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -154,6 +163,7 @@ public sealed record ClaudioConfig
             WslProjectRoot         = Env("CLAUDIO_WSL_PROJECT_ROOT") ?? cfg.WslProjectRoot,
             GitHubUsername         = Env("CLAUDIO_GITHUB_USERNAME")  ?? cfg.GitHubUsername,
             MaxMemoryEntries       = EnvInt("CLAUDIO_MAX_MEMORY")    ?? cfg.MaxMemoryEntries,
+            DiscordWebhookUrl      = Env("CLAUDIO_DISCORD_WEBHOOK_URL") ?? cfg.DiscordWebhookUrl,
         };
     }
 

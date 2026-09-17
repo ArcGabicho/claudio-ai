@@ -6,6 +6,7 @@ using ClaudioAi.Audio;
 using ClaudioAi.Brain;
 using ClaudioAi.Diagnostics;
 using ClaudioAi.Memory;
+using ClaudioAi.Notifications;
 using ClaudioAi.Projects;
 using ClaudioAi.Speech;
 
@@ -36,6 +37,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
     readonly GitOps _git;
     readonly MemoryStore _memory;
     readonly Voice _voice;
+    readonly IDiscordNotifier _discord;
 
     readonly CancellationTokenSource _cts = new();
     readonly SemaphoreSlim _turnLock = new(1, 1);
@@ -71,6 +73,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         _projects = new ProjectResolver(cfg);
         _git = new GitOps(cfg);
         _voice = new Voice(cfg);
+        _discord = new DiscordNotifier(cfg);
 
         _icons = Enum.GetValues<TrayState>().ToDictionary(s => s, TrayIconFactory.Create);
 
@@ -128,6 +131,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
             Log.Error("Fallo al iniciar Claudio", ex);
             SetState(TrayState.Paused, "Claudio — error al iniciar");
             Notify("Claudio no arrancó", ex.Message, ToolTipIcon.Error);
+            _ = _discord.SendSystemAlertAsync("critical", $"Claudio no arrancó: {ex.Message}");
         }
     }
 
@@ -229,8 +233,15 @@ public sealed class ClaudioTrayContext : ApplicationContext
                         await _voice.SpeakAsync("¿Cómo quieres llamar al proyecto?", _cts.Token);
                         return;
                     }
+                    var newTaskId = Guid.NewGuid().ToString("N")[..8];
+                    var newSw = System.Diagnostics.Stopwatch.StartNew();
+                    _ = _discord.SendTaskStartedAsync(newTaskId, $"new_project: {name}", name);
                     var created = await Task.Run(() => _git.CreateProject(name));
+                    newSw.Stop();
                     Log.Info($"new_project «{name}» → {(created.Ok ? "ok" : "error")}: {created.Message}");
+                    _ = created.Ok
+                        ? _discord.SendTaskCompletedAsync(newTaskId, $"new_project: {name}", newSw.Elapsed)
+                        : _discord.SendTaskFailedAsync(newTaskId, $"new_project: {name}", created.Message);
                     await _voice.SpeakAsync(created.Message, _cts.Token);
                     return;
                 }
@@ -244,8 +255,15 @@ public sealed class ClaudioTrayContext : ApplicationContext
                         return;
                     }
                     SetState(TrayState.Busy, "Claudio — clonando…");
+                    var cloneTaskId = Guid.NewGuid().ToString("N")[..8];
+                    var cloneSw = System.Diagnostics.Stopwatch.StartNew();
+                    _ = _discord.SendTaskStartedAsync(cloneTaskId, $"clone_repo: {reference}", reference);
                     var cloned = await Task.Run(() => _git.Clone(reference));
+                    cloneSw.Stop();
                     Log.Info($"clone_repo «{reference}» → {(cloned.Ok ? "ok" : "error")}: {cloned.Message}");
+                    _ = cloned.Ok
+                        ? _discord.SendTaskCompletedAsync(cloneTaskId, $"clone_repo: {reference}", cloneSw.Elapsed)
+                        : _discord.SendTaskFailedAsync(cloneTaskId, $"clone_repo: {reference}", cloned.Message);
                     await _voice.SpeakAsync(cloned.Message, _cts.Token);
                     return;
                 }
@@ -303,6 +321,7 @@ public sealed class ClaudioTrayContext : ApplicationContext
         catch (Exception ex)
         {
             Log.Error("Error durante el turno", ex);
+            _ = _discord.SendSystemAlertAsync("error", $"Error durante el turno («{command}»): {ex.Message}");
             try { await _voice.SpeakAsync("Ha habido un error.", CancellationToken.None); } catch { }
         }
         finally

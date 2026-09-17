@@ -145,6 +145,23 @@ Pruébalo con `dotnet run -c Release -- --say "texto de prueba"` — el motor de
 voz de la primera línea debe decir `elevenlabs`. `ttsEngine: "auto"` nunca la
 elige sola (es de pago): hay que pedirla explícitamente.
 
+### Notificaciones a Discord (opcional)
+
+`new_project`, `clone_repo`, los fallos no controlados de un turno y los fallos
+al arrancar avisan a un canal de Discord vía webhook (`src/Notifications/DiscordNotifier.cs`),
+con embeds 🚀 iniciada / ✅ completada / ❌ fallida / 🔄 progreso / ⚠️ alerta. Si
+no se configura, esas notificaciones simplemente no se envían — Claudio sigue
+funcionando igual.
+
+1. En Discord: *Configuración del servidor → Integraciones → Webhooks → Nuevo
+   webhook*, y copia su URL.
+2. Guárdala **solo** como variable de entorno de usuario (nunca en
+   `appsettings.json`, que está en git):
+   ```powershell
+   setx CLAUDIO_DISCORD_WEBHOOK_URL "https://discord.com/api/webhooks/…"
+   ```
+   Ábrela en una terminal nueva para que se aplique.
+
 ## Uso
 
 ```powershell
@@ -295,6 +312,7 @@ como frases, sube `silenceThreshold`; si corta tus frases a mitad, sube
 | `wslProjectRoot`         | `~/Proyectos` | carpeta dentro de esa distro; `~` se resuelve al `$HOME` real  |
 | `gitHubUsername`         | `ArcGabicho` | usuario de GitHub por defecto para "clona mi repo X"            |
 | `maxMemoryEntries`       | `200`       | notas máximas en la memoria persistente antes de olvidar las más antiguas |
+| *(sin clave)*            | —           | `discordWebhookUrl` no existe aquí: se lee solo de `CLAUDIO_DISCORD_WEBHOOK_URL` (ver arriba) |
 
 `projectWindowsRoots` (no aparece en `appsettings.json` por defecto) son las
 carpetas de Windows donde se buscan proyectos; por defecto
